@@ -56,7 +56,11 @@ def extract(path):
     for t in model["tagged"]:
         meta = t["meta"]
         if meta.get("kind") == "circuit" or "circuit" in meta:
-            cid = meta.get("circuit") or (t["label"] or "").split()[0]
+            # never index into a possibly-empty label: an edge tagged
+            # kind=circuit with no circuit attribute and no label crashed the
+            # whole run with IndexError
+            parts = (t["label"] or "").split()
+            cid = meta.get("circuit") or (parts[0] if parts else None)
             if not re.fullmatch(r"WC\d{2}", cid or ""):
                 continue
             c = circuits.setdefault(cid, {
@@ -210,7 +214,11 @@ for c in PAYLOAD["circuits"]:
         if c.get("subranges"):
             desc.append("vlans=" + ";".join(
                 "%s:%s" % (s["sub"], s["vlans"]) for s in c["subranges"]))
-        body["description"] = " ".join(desc)[:200]
+        # ownership marker: the pruner must never delete a row it did not
+        # create. Without this, deleting a circuit from the drawing removed
+        # hand-made Nautobot rows that merely shared the WCnn naming shape.
+        desc.append("managed-by=drawio-pipeline")
+        body["description"] = " ".join(desc)[:220]
 
         if DRY:
             exists = Circuit.objects.filter(cid=c["cid"]).exists()
@@ -287,6 +295,37 @@ if not DRY:
             stale.delete()
             pruned_vlans += n
 OUT["vlans_pruned"] = pruned_vlans
+
+# ---- prune circuits and cables that no longer appear in the drawing
+# Same reasoning as the VLAN prune: the drawing is the source, so a circuit
+# deleted from the poster must leave the database or the two diverge. Scoped to
+# objects this pipeline owns -- only cids present in the model's WCnn shape and
+# only cables labelled 'WCnn hopN' -- so nothing hand-made in Nautobot is
+# touched.
+pruned_circuits = pruned_cables = 0
+if not DRY:
+    want_cids = {c["cid"] for c in PAYLOAD["circuits"]}
+    want_cables = {"%s hop%d" % (c["cid"], i)
+                   for c in PAYLOAD["circuits"]
+                   for i in range(len(c.get("hops") or []))}
+    # cable labels are already a precise ownership signal ('WCnn hopN' is a
+    # pattern this pipeline defines and nothing else produces), so no extra
+    # marker is needed here
+    stale_cables = [cab for cab in Cable.objects.filter(label__contains=" hop")
+                    if re.fullmatch(r"WC[0-9]{2} hop[0-9]+", cab.label or "")
+                    and cab.label not in want_cables]
+    for cab in stale_cables:
+        cab.delete()
+        pruned_cables += 1
+    # only our own rows: never prune something a human made
+    stale_circuits = [c for c in Circuit.objects.filter(
+                          description__contains="managed-by=drawio-pipeline")
+                      if c.cid not in want_cids]
+    for c in stale_circuits:
+        c.delete()
+        pruned_circuits += 1
+OUT["circuits_pruned"] = pruned_circuits
+OUT["cables_pruned"] = pruned_cables
 
 # ---- devices + cables from hops
 def dev_for(node_id):

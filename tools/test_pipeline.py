@@ -263,6 +263,42 @@ def test_remote_script_prunes_stale_vlans():
     assert 'OUT["vlans_pruned"]' in t, "prunes are not reported in the run output"
 
 
+def test_prune_is_scoped_to_owned_rows():
+    """The pruner must never delete a row the pipeline did not create.
+
+    Measured failure: deleting one circuit from the drawing removed five from
+    Nautobot, including hand-made rows that merely shared the WCnn naming shape.
+    """
+    t = sync_nautobot.REMOTE_TEMPLATE
+    assert "managed-by=drawio-pipeline" in t, "ownership marker missing"
+    assert 'description__contains="managed-by=drawio-pipeline"' in t, \
+        "pruner is not scoped to owned rows"
+    # the old unscoped form must be gone
+    assert 'for c in Circuit.objects.all()' not in t, \
+        "pruner still scans every circuit, not just owned ones"
+
+
+def test_empty_label_does_not_crash():
+    """An edge tagged kind=circuit with no circuit id and no label crashed the
+    whole run with IndexError before this was fixed."""
+    body = ('<mxCell id="a" value="a" vertex="1" parent="1"><mxGeometry/></mxCell>'
+            '<mxCell id="e" value="" edge="1" parent="1" source="a" target="a">'
+            '<mxGeometry/></mxCell>')
+    src, _ = write(MX % body)
+    # hand-craft an object with kind=circuit and an empty label
+    import xml.etree.ElementTree as ET
+    t = ET.parse(src)
+    holder = [d for d in t.getroot().iter("diagram")][0].find("mxGraphModel/root")
+    o = ET.SubElement(holder, "object", {"id": "weird", "label": "",
+                                         "kind": "circuit"})
+    c = ET.SubElement(o, "mxCell", {"edge": "1", "parent": "1"})
+    ET.SubElement(c, "mxGeometry", {"relative": "1", "as": "geometry"})
+    out = src + ".o"
+    t.write(out, encoding="UTF-8", xml_declaration=True)
+    ex = sync_nautobot.extract(out)      # must not raise
+    assert isinstance(ex["circuits"], dict)
+
+
 def test_extraction_is_deterministic():
     """Same input must yield byte-identical output, or sync churns."""
     import json
