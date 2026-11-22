@@ -244,6 +244,14 @@ def tag(src, dst):
             stats["wrapped"] += 1
 
     tree.write(dst, encoding="UTF-8", xml_declaration=True)
+    # Sub-ranges are part of the same job. Keeping them as a separate step
+    # meant the documented quickstart silently produced 0 of 63 sub-ranges.
+    # tag_subranges returns its own counters; merge them so one call reports
+    # everything it did.
+    subs = tag_subranges(dst, dst)
+    stats["boxes"] = subs["wrapped"]
+    stats["subranges"] = subs["subranges"]
+    stats["boxes_already"] = subs["already"]
     return stats
 
 
@@ -346,6 +354,8 @@ def main(argv=None):
             print("not valid XML: %s\n  file: %s" % (e, a.src), file=sys.stderr)
             return 2
         print("wrapped %(wrapped)d edges (%(labels)d labels), already %(already)d" % st)
+        print("wrapped %(boxes)d boxes carrying %(subranges)d sub-ranges "
+              "(already %(boxes_already)d)" % st)
         return 0
 
     if a.mode == "tag-subs":

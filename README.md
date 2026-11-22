@@ -33,8 +33,10 @@ aca1dc13e042dfa67b8030d350c0391f  tagged
 ## Quick start
 
 ```bash
-# 1. tag a drawio with circuit metadata (adds <object>, touches nothing else)
+# 1. tag a drawio: circuits AND sub-ranges in one pass (adds <object>
+#    wrappers, touches no style)
 python3 tools/tag_drawio.py tag diagrams/topology.drawio -o /tmp/tagged.drawio
+#    -> wrapped 56 edges, wrapped 86 boxes carrying 133 sub-ranges
 
 # 2. prove the tagging was lossless
 python3 tools/tag_drawio.py check diagrams/topology.drawio /tmp/tagged.drawio

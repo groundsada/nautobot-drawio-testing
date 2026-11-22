@@ -263,6 +263,24 @@ def test_remote_script_prunes_stale_vlans():
     assert 'OUT["vlans_pruned"]' in t, "prunes are not reported in the run output"
 
 
+def test_single_tag_command_yields_subranges():
+    """One `tag` call must produce BOTH circuit tags and sub-range tags.
+
+    Regression: sub-ranges needed a separate `tag-subs` step the README never
+    mentioned, so following the quickstart literally produced 0 of 63
+    sub-ranges while reporting success.
+    """
+    body = shape("a", "a") + shape("b", "b", 300) + edge("e1", "a", "b", "WC30") \
+           + shape("s1", "WC30 VLAN Range WC30-1: 2400-2409 (NRE121,122)", 500)
+    src, out = write(MX % body)
+    tag_drawio.tag(src, out)            # one call, as documented
+    ex = sync_nautobot.extract(out)
+    subs = ex["circuits"]["WC30"]["subranges"]
+    assert len(subs) == 1, "tag did not produce sub-ranges: %s" % subs
+    assert subs[0]["vlans"] == "2400-2409", subs
+    assert subs[0]["nres"] == [121, 122], subs
+
+
 def test_prune_is_scoped_to_owned_rows():
     """The pruner must never delete a row the pipeline did not create.
 
