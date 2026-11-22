@@ -1,0 +1,64 @@
+name: validate
+
+on:
+  pull_request:
+    paths: ["diagrams/**", "tools/**"]
+  push:
+    branches: [main]
+    paths: ["diagrams/**", "tools/**"]
+
+jobs:
+  # Runs anywhere -- no cluster needed. This is the gate that must never fail:
+  # if tagging is not lossless, the poster is being altered by the pipeline.
+  lossless:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+
+      - name: tag a fixture and prove styles are unchanged
+        run: |
+          python3 tools/tag_drawio.py tag examples/fixture.drawio -o /tmp/tagged.drawio
+          python3 tools/tag_drawio.py check examples/fixture.drawio /tmp/tagged.drawio
+
+      - name: extraction finds circuits and hops
+        run: |
+          python3 tools/sync_nautobot.py --drawio /tmp/tagged.drawio \
+            --dry-run --json /tmp/model.json --skip-cluster
+          python3 - <<'PY'
+          import json
+          m = json.load(open("/tmp/model.json"))
+          n = len(m["circuits"])
+          hops = sum(1 for c in m["circuits"].values() if c["hops"])
+          assert n > 0, "no circuits extracted"
+          assert hops > 0, "no hops extracted -- tagged the label, not the edge"
+          print(f"ok: {n} circuits, {hops} with hops")
+          PY
+
+  # Needs a cluster; only runs when the repo is wired to one.
+  sync:
+    if: vars.NAUTOBOT_SYNC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    needs: lossless
+    environment: nautobot
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+
+      - name: configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: tag diagram
+        run: python3 tools/tag_drawio.py tag diagrams/topology.drawio -o /tmp/tagged.drawio
+
+      - name: sync
+        run: |
+          python3 tools/sync_nautobot.py --drawio /tmp/tagged.drawio --apply
+          # second run must be a no-op; a pipeline that duplicates is worse
+          # than one that fails
+          python3 tools/sync_nautobot.py --drawio /tmp/tagged.drawio --apply --expect-noop

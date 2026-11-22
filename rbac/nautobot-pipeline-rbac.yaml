@@ -1,0 +1,72 @@
+# Least-privilege RBAC for the drawio -> Nautobot pipeline.
+#
+# Scope: read the Nautobot server pod and exec into it. Nothing else.
+#
+# Why exec-into-pod instead of the HTTP API:
+#   The REST API is the *consumer* surface (health scripts, GraphQL). Bulk
+#   upserts through it were measured at ~2s per object and cannot express cable
+#   terminations correctly. `nautobot-server shell` inside the pod uses the ORM,
+#   is idempotent, and is a single round trip.
+#
+# Why no resourceNames:
+#   `resourceNames` cannot select "the pod with this label" -- it needs exact
+#   names, which change on every rollout. The server pod is identified by the
+#   label app.kubernetes.io/component=nautobot-server. The cost of dropping
+#   resourceNames is that the SA can exec into OTHER pods in mfsada too.
+#
+#   That tradeoff is real and is mitigated by the namespace being the boundary:
+#   mfsada is already a shared namespace where the owner holds *.*, so this SA
+#   is strictly less privileged than the human it serves. If mfsada ever holds
+#   secrets the pipeline should not read, move Nautobot to its own namespace
+#   and keep this Role there -- noted in docs/SECURITY.md.
+#
+# Deliberately NOT granted:
+#   secrets            no credential access
+#   pods delete/create cannot destroy or start workloads
+#   deployments        cannot scale or restart
+#   ClusterRole        namespace-scoped only
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: drawio-pipeline
+  namespace: mfsada
+  labels:
+    app.kubernetes.io/name: drawio-pipeline
+    app.kubernetes.io/part-of: nautobot-drawio-testing
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: drawio-pipeline
+  namespace: mfsada
+  labels:
+    app.kubernetes.io/name: drawio-pipeline
+rules:
+  # locate the running Nautobot server pod
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # run `nautobot-server shell` inside it
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  # resolve svc/nautobot-default when exec-ing by service
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: drawio-pipeline
+  namespace: mfsada
+  labels:
+    app.kubernetes.io/name: drawio-pipeline
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: drawio-pipeline
+subjects:
+  - kind: ServiceAccount
+    name: drawio-pipeline
+    namespace: mfsada
