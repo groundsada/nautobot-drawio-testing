@@ -210,6 +210,57 @@ def test_capacity_inferred_is_marked():
     assert src.get("capacity") == "inferred-from-stroke", src
 
 
+def test_remote_script_syntax():
+    """The embedded sync script is 177 lines that only run inside a pod.
+
+    A syntax error there surfaces as a failed cluster run, minutes after the
+    push. Parse it locally instead.
+    """
+    import ast
+    ast.parse(sync_nautobot.REMOTE_TEMPLATE)
+
+
+def test_remote_script_handles_missing_provider():
+    """Nautobot requires a provider; the drawing has none.
+
+    The script must fall back to a sentinel rather than passing None, which
+    fails the not-null constraint. Asserted on the source because the script
+    needs Django models to execute.
+    """
+    t = sync_nautobot.REMOTE_TEMPLATE
+    assert "UNKNOWN (not in drawing)" in t, "sentinel provider missing"
+    assert 'c.get("provider") or "UNKNOWN' in t.replace("'", '"'), \
+        "provider fallback not wired"
+
+
+def test_remote_script_sums_vlan_spans():
+    """VLAN spans must expand to individual ids, and refuse absurd spans.
+
+    A mis-parse that yields 2000-9999 would otherwise write 8000 rows.
+    """
+    t = sync_nautobot.REMOTE_TEMPLATE
+    assert "hi - lo > 200" in t, "span sanity guard missing"
+    assert "range(lo, hi + 1)" in t, "VLAN expansion missing"
+
+
+def test_remote_script_uses_per_circuit_hop_index():
+    """A global index made re-runs create hop1, hop2, hop3... forever."""
+    t = sync_nautobot.REMOTE_TEMPLATE
+    assert 'enumerate(c.get("hops") or [])' in t, \
+        "hop index is not per-circuit -- re-runs will not converge"
+
+
+def test_extraction_is_deterministic():
+    """Same input must yield byte-identical output, or sync churns."""
+    import json
+    body = (shape("a", "a") + shape("b", "b", 200)
+            + edge("e1", "a", "b", "WC30 400G"))
+    out = tagged(MX % body)
+    a = json.dumps(sync_nautobot.extract(out), sort_keys=True)
+    b = json.dumps(sync_nautobot.extract(out), sort_keys=True)
+    assert a == b, "extraction is not deterministic"
+
+
 # --------------------------------------------------------------- runner
 def main():
     tests = [(n, f) for n, f in sorted(globals().items())
