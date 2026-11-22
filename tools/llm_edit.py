@@ -121,11 +121,62 @@ def main(argv=None):
     for e in plan.get("edits", []):
         print("  %s -> style copied from kind=%r" % (e.get("label"), e.get("kind")))
 
-    if a.out:
-        # the actual XML mutation lives in tag_drawio; until it grows an
-        # apply-edit mode this writes the plan alongside the source unchanged
-        pathlib.Path(a.out).write_text(pathlib.Path(a.drawio).read_text())
-        print("wrote %s (source unchanged; plan in %s)" % (a.out, a.json or "-"))
+    if not a.out:
+        return 0
+
+    # Apply the edits. Only `add_object` is implemented; anything else is
+    # refused rather than silently ignored, because a tool that accepts an edit
+    # and writes an unchanged file is worse than one that does not exist.
+    import xml.etree.ElementTree as ET
+    unsupported = [e for e in plan.get("edits", [])
+                   if e.get("op") != "add_object"]
+    if unsupported:
+        print("unsupported op(s): %s -- refusing rather than half-applying"
+              % sorted({e.get("op") for e in unsupported}), file=sys.stderr)
+        return 1
+
+    tree = ET.parse(a.drawio)
+    root = tree.getroot()
+    applied = 0
+    for e in plan.get("edits", []):
+        kind = e.get("kind")
+        style = styles.get(kind)
+        if not style:
+            print("no style for kind %r" % kind, file=sys.stderr)
+            return 1
+        for diagram in root.iter("diagram"):
+            model = diagram.find("mxGraphModel")
+            if model is None:
+                continue
+            holder = model.find("root")
+            if holder is None:
+                continue
+            existing = {c.get("id") for c in holder}
+            n = 1
+            while "agent-%d" % n in existing:
+                n += 1
+            new_id = "agent-%d" % n
+            obj = ET.SubElement(holder, "object", {
+                "id": new_id,
+                "label": e.get("label") or "",
+                "placeholders": "1",
+            })
+            for k, v in (e.get("attrs") or {}).items():
+                obj.set(k, str(v))
+            cell = ET.SubElement(obj, "mxCell", {
+                "style": style,          # copied verbatim from a sibling
+                "vertex": "1",
+                "parent": "1",
+            })
+            ET.SubElement(cell, "mxGeometry", {
+                "x": "80", "y": "80", "width": "120", "height": "60",
+                "as": "geometry",
+            })
+            applied += 1
+            break
+    tree.write(a.out, encoding="UTF-8", xml_declaration=True)
+    print("wrote %s (%d object(s) added, style copied from siblings)"
+          % (a.out, applied))
     return 0
 
 

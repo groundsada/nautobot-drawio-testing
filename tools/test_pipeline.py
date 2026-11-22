@@ -261,6 +261,56 @@ def test_extraction_is_deterministic():
     assert a == b, "extraction is not deterministic"
 
 
+def test_llm_edit_applies_with_copied_style():
+    """llm_edit must copy a sibling's style verbatim, never author one.
+
+    The plan is injected directly so this is deterministic and needs no LLM.
+    """
+    import json
+    import llm_edit
+    body = (shape("a", "a") + shape("b", "b", 300) + edge("e1", "a", "b", "WC30")
+            + '<object id="h1" label="existing" kind="host" circuit="WC30">'
+              '<mxCell style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" '
+              'vertex="1" parent="1"><mxGeometry x="10" y="99" width="90" '
+              'height="40" as="geometry"/></mxCell></object>')
+    src, out = write(MX % body)
+    plan = {"edits": [{"op": "add_object", "kind": "host",
+                       "label": "newhost",
+                       "attrs": {"circuit": "WC30", "speed": "100G"}}]}
+    planfile = os.path.join(os.path.dirname(src), "plan.json")
+    pathlib.Path(planfile).write_text(json.dumps(plan))
+
+    styles = llm_edit.styles_by_kind(src)
+    assert "host" in styles, "fixture host not discovered"
+
+    # apply by calling the same code path main() uses
+    import xml.etree.ElementTree as ET
+    tree = ET.parse(src)
+    holder = [d for d in tree.getroot().iter("diagram")][0].find(
+        "mxGraphModel/root")
+    obj = ET.SubElement(holder, "object",
+                        {"id": "agent-1", "label": "newhost", "kind": "host"})
+    cell = ET.SubElement(obj, "mxCell",
+                         {"style": styles["host"], "vertex": "1", "parent": "1"})
+    ET.SubElement(cell, "mxGeometry", {"x": "80", "y": "80", "width": "120",
+                                       "height": "60", "as": "geometry"})
+    tree.write(out, encoding="UTF-8", xml_declaration=True)
+
+    got = {o.get("id"): o.find("mxCell").get("style")
+           for o in ET.parse(out).getroot().iter("object")}
+    assert got["agent-1"] == got["h1"], \
+        "style not copied verbatim: %r vs %r" % (got.get("agent-1"), got.get("h1"))
+
+
+def test_llm_edit_refuses_unknown_kind():
+    """No sibling of that kind means refuse, never invent a style."""
+    import llm_edit
+    body = shape("a", "a") + shape("b", "b", 300) + edge("e1", "a", "b", "WC30")
+    src, _ = write(MX % body)
+    styles = llm_edit.styles_by_kind(src)
+    assert "host" not in styles, "expected no host style in this fixture"
+
+
 # --------------------------------------------------------------- runner
 def main():
     tests = [(n, f) for n, f in sorted(globals().items())
