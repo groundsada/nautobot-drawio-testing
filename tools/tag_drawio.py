@@ -295,13 +295,16 @@ def check(original, tagged):
             if inner is None:
                 continue
             geo = inner.find("mxGeometry")
+            # topologogy may live on the WRAPPER (tag_drawio mirrors it there),
+            # so reading only the inner mxCell compared None to None and made
+            # this check blind to a retargeted edge.
             cells.append({
                 "id": obj.get("id"),
                 "style": inner.get("style"),
-                "edge": inner.get("edge"),
-                "vertex": inner.get("vertex"),
-                "source": inner.get("source"),
-                "target": inner.get("target"),
+                "edge": obj.get("edge") or inner.get("edge"),
+                "vertex": obj.get("vertex") or inner.get("vertex"),
+                "source": obj.get("source") or inner.get("source"),
+                "target": obj.get("target") or inner.get("target"),
                 "geo": tuple(sorted(geo.attrib.items())) if geo is not None else None,
                 "label": obj.get("label"),
             })

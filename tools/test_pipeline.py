@@ -74,6 +74,44 @@ def test_tag_is_lossless():
     assert na == nb, "shape count changed %d -> %d" % (na, nb)
 
 
+def test_check_detects_style_tampering():
+    """check() is the guarantee everything else rests on; prove it bites."""
+    src, out = write(MX % (shape("n1", "a") + shape("n2", "b", 300)
+                           + edge("e1", "n1", "n2", "WC30")))
+    tag_drawio.tag(src, out)
+    import xml.etree.ElementTree as ET
+    t = ET.parse(out)
+    for c in t.getroot().iter("mxCell"):
+        if "3399FF" in (c.get("style") or ""):
+            c.set("style", c.get("style").replace("3399FF", "FF00FF"))
+            break
+    bad = out + ".bad"
+    t.write(bad, encoding="UTF-8", xml_declaration=True)
+    problems, _, _, _ = tag_drawio.check(out, bad)
+    assert problems, "check() missed a changed style"
+
+
+def test_check_detects_topology_tampering():
+    """Tagging moves source/target onto the <object> wrapper.
+
+    check() used to read them from the inner mxCell only, so it compared None
+    to None and was blind to a retargeted edge entirely.
+    """
+    src, out = write(MX % (shape("n1", "a") + shape("n2", "b", 300)
+                           + edge("e1", "n1", "n2", "WC30")))
+    tag_drawio.tag(src, out)
+    import xml.etree.ElementTree as ET
+    t = ET.parse(out)
+    for o in t.getroot().iter("object"):
+        if o.get("target"):
+            o.set("target", "SOMEWHERE_ELSE")
+            break
+    bad = out + ".bad"
+    t.write(bad, encoding="UTF-8", xml_declaration=True)
+    problems, _, _, _ = tag_drawio.check(out, bad)
+    assert problems, "check() missed a retargeted edge"
+
+
 def test_tag_is_idempotent():
     """Re-tagging must wrap nothing new, or CI would drift every run."""
     src, out = write(MX % (shape("n1", "a") + shape("n2", "b", 300)
