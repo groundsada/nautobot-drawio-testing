@@ -82,3 +82,10 @@ Measured results with the applied Role:
 | delete pods | no |
 | get secrets | no |
 | patch deployments | no |
+| delete pods (real attempt) | **no — Forbidden, pod survived** |
+| list secrets in another ns | no — Forbidden |
+| get pods in `default` | no — Forbidden |
+
+Note: `kubectl delete --dry-run=client` reports success for this SA even though
+a real delete is Forbidden — dry-run does not perform an authorization check.
+Only a live attempt proves anything.
