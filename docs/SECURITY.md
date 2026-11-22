@@ -58,3 +58,27 @@ time and are never written to disk by these tools, logged, or committed.
 If this ever runs in CI, the token must come from a CI secret, and the workflow
 should be restricted to trusted branches — an agent that can edit diagrams and
 trigger a Nautobot sync is an agent that can change the network model.
+
+## Verifying the RBAC (do not trust `auth can-i` for subresources)
+
+`kubectl auth can-i create pods/exec` reports **no** even when the Role grants
+it — kubectl routes subresource checks oddly without `--subresource`. Always
+verify with a real token:
+
+```bash
+TOK=$(kubectl create token drawio-pipeline -n mfsada --duration=10m)
+kubectl --token="$TOK" get pods -n mfsada -l app.kubernetes.io/component=nautobot-default
+kubectl --token="$TOK" exec -n mfsada <nautobot-pod> -c nautobot -- sh -c 'echo EXEC_OK'
+```
+
+Measured results with the applied Role:
+
+| check | result |
+|---|---|
+| get pods | yes |
+| list services | yes |
+| exec into nautobot pod | **yes (EXEC_OK)** |
+| create pods | no |
+| delete pods | no |
+| get secrets | no |
+| patch deployments | no |
