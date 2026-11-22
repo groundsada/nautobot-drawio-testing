@@ -94,6 +94,32 @@ def extract(path):
                 c["_src"]["incomplete_edges"] = c["_src"].get("incomplete_edges", 0) + 1
             continue
 
+        if meta.get("kind") == "subrange":
+            for chunk in (meta.get("subs") or "").split(","):
+                chunk = chunk.strip()
+                if not chunk:
+                    continue
+                m = re.fullmatch(r"WC(\d{2})-(\d+)", chunk)
+                if not m:
+                    continue
+                cid = "WC%s" % m.group(1)
+                c = circuits.setdefault(cid, {
+                    "cid": cid, "capacity": None, "provider": None,
+                    "subranges": [], "hops": [], "_src": {},
+                })
+                parsed = tag_drawio.parse_subranges(t.get("label") or "")
+                for ps in parsed:
+                    if ps["sub"] != chunk:
+                        continue
+                    if ps["sub"] in {x["sub"] for x in c["subranges"]}:
+                        c["_src"]["duplicate_subrange_boxes"] = \
+                            c["_src"].get("duplicate_subrange_boxes", 0) + 1
+                        continue
+                    c["subranges"].append({
+                        "sub": ps["sub"], "vlans": ps["vlans"], "nres": ps["nres"]})
+                    c["_src"]["subrange_source"] = "drawing"
+            continue
+
         if meta.get("kind") == "host":
             hosts.append({
                 "name": meta.get("hostname") or t["label"],
@@ -130,7 +156,7 @@ def extract(path):
 
 # ------------------------------------------------------------------- remote
 REMOTE_TEMPLATE = """
-import json, os, django
+import json, os, re, django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "nautobot_config")
 django.setup()
 from nautobot.dcim.models import Device, Cable, Interface, DeviceType, Location
@@ -196,6 +222,40 @@ for c in PAYLOAD["circuits"]:
     except Exception as e:
         OUT["errors"].append("%s: %s" % (c["cid"], str(e)[:120]))
         note("skipped")
+
+# ---- VLANs as first-class objects
+from nautobot.ipam.models import VLAN, VLANGroup
+# one group per circuit: drawio encodes a sub-range as a span, and Nautobot
+# needs one row per VLAN id to be queryable
+vgroup_cache = {}
+created_vlans = 0
+for c in PAYLOAD["circuits"]:
+    for sr in (c.get("subranges") or []):
+        spec = sr.get("vlans") or ""
+        m = re.fullmatch(r"([0-9]+)(?:-([0-9]+))?", spec)
+        if not m:
+            continue
+        lo = int(m.group(1)); hi = int(m.group(2) or m.group(1))
+        if hi - lo > 200:      # sanity: refuse absurd spans from a bad parse
+            OUT.setdefault("errors", []).append(
+                "%s: refusing span %s (%d ids)" % (sr.get("sub"), spec, hi - lo))
+            continue
+        gname = "SC26 %s" % c["cid"]
+        if gname not in vgroup_cache:
+            g, _ = VLANGroup.objects.get_or_create(name=gname)
+            vgroup_cache[gname] = g
+        for vid in range(lo, hi + 1):
+            if DRY:
+                note("updated" if VLAN.objects.filter(vid=vid, vlan_group=vgroup_cache[gname]).exists() else "created")
+                continue
+            try:
+                VLAN.objects.update_or_create(
+                    vid=vid, vlan_group=vgroup_cache[gname],
+                    defaults={"name": "%s %s" % (sr.get("sub"), vid), "status": st})
+                created_vlans += 1
+            except Exception as e:
+                OUT["errors"].append("vlan %d/%s: %s" % (vid, gname, str(e)[:80]))
+OUT["vlans_written"] = created_vlans
 
 # ---- devices + cables from hops
 def dev_for(node_id):

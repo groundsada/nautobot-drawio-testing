@@ -79,6 +79,83 @@ def find_circuit_ids(text):
 
 
 # --------------------------------------------------------------- tag
+SUB_RE = re.compile(r"\bWC(\d{2})-(\d{1,2})\??\s*:?\s*"
+                    r"(\d{3,4})(?:\s*[-\u2013]\s*(\d{3,4}))?"
+                    r"(?:[^)]*?\(([^)]*NRE[^)]*)\))?")
+
+
+def parse_subranges(text):
+    """'WC31-3: 3020-3029 (NRE122,112)' -> [{sub,circuit,vlans,nres}]
+
+    The same head-to-next-head segmentation used elsewhere: a parenthetical tag
+    belongs to the head it follows, never to an earlier one.
+    """
+    out = []
+    heads = list(re.finditer(r"\bWC(\d{2})-(\d{1,2})\??", text))
+    for i, h in enumerate(heads):
+        seg = text[h.end(): heads[i + 1].start() if i + 1 < len(heads) else len(text)]
+        m = re.match(r"\s*:?\s*(\d{3,4})(?:\s*[-\u2013]\s*(\d{3,4}))?", seg)
+        if not m:
+            continue
+        lo, hi = m.group(1), m.group(2)
+        nres = []
+        for paren in re.findall(r"\(([^)]*)\)", seg):
+            if "NRE" in paren.upper():
+                nres = [int(x) for x in re.findall(r"\d+", paren)]
+        out.append({
+            "sub": "WC%s-%d" % (h.group(1), int(h.group(2))),
+            "circuit": "WC%s" % h.group(1),
+            "vlans": lo if not hi else "%s-%s" % (lo, hi),
+            "nres": nres,
+        })
+    return out
+
+
+def tag_subranges(src, dst):
+    """Wrap vertices whose text names sub-ranges in <object> metadata."""
+    tree = ET.parse(src)
+    root = tree.getroot()
+    st = {"wrapped": 0, "subranges": 0, "already": 0}
+    for diagram in root.iter("diagram"):
+        model = diagram.find("mxGraphModel")
+        if model is None:
+            continue
+        holder = model.find("root")
+        if holder is None:
+            continue
+        for idx, c in enumerate(list(holder)):
+            if c.tag == "object":
+                if (c.get("kind") == "subrange"):
+                    st["already"] += 1
+                continue
+            if c.tag != "mxCell" or c.get("edge"):
+                continue
+            subs = parse_subranges(label_text(c))
+            if not subs:
+                continue
+            attrs = {
+                "id": c.get("id"),
+                "label": c.get("value") or "",
+                "kind": "subrange",
+                "circuits": ",".join(sorted({s["circuit"] for s in subs})),
+                "subs": ",".join(s["sub"] for s in subs),
+            }
+            obj = ET.Element("object", {k: v for k, v in attrs.items() if v})
+            inner = ET.SubElement(obj, "mxCell")
+            for k, v in c.attrib.items():
+                if k in ("id", "value"):
+                    continue
+                inner.set(k, v)
+            for sub in list(c):
+                inner.append(sub)
+            holder.remove(c)
+            holder.insert(idx, obj)
+            st["wrapped"] += 1
+            st["subranges"] += len(subs)
+    tree.write(dst, encoding="UTF-8", xml_declaration=True)
+    return st
+
+
 def tag(src, dst):
     """Wrap the EDGE that carries a circuit label in <object> metadata.
 
@@ -254,7 +331,7 @@ def check(original, tagged):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["tag", "read", "check"])
+    ap.add_argument("mode", choices=["tag", "tag-subs", "read", "check"])
     ap.add_argument("src")
     ap.add_argument("other", nargs="?", help="tagged file (check mode)")
     ap.add_argument("-o", "--out")
@@ -269,6 +346,18 @@ def main(argv=None):
             print("not valid XML: %s\n  file: %s" % (e, a.src), file=sys.stderr)
             return 2
         print("wrapped %(wrapped)d edges (%(labels)d labels), already %(already)d" % st)
+        return 0
+
+    if a.mode == "tag-subs":
+        if not a.out:
+            ap.error("tag-subs mode needs -o")
+        try:
+            st = tag_subranges(a.src, a.out)
+        except ET.ParseError as e:
+            print("not valid XML: %s" % e, file=sys.stderr)
+            return 2
+        print("wrapped %(wrapped)d boxes carrying %(subranges)d sub-ranges "
+              "(already %(already)d)" % st)
         return 0
 
     if a.mode == "read":
