@@ -257,6 +257,37 @@ for c in PAYLOAD["circuits"]:
                 OUT["errors"].append("vlan %d/%s: %s" % (vid, gname, str(e)[:80]))
 OUT["vlans_written"] = created_vlans
 
+# ---- prune VLANs that no longer appear in the drawing
+# A materialized view that only ever adds is not a view: remove a VLAN from the
+# poster and the row would linger forever, so the DB and the source diverge
+# silently. Prune per group, and report what went, because deleting rows is
+# destructive and must be visible in the run output.
+pruned_vlans = 0
+if not DRY:
+    wanted = {}
+    for c in PAYLOAD["circuits"]:
+        gname = "SC26 %s" % c["cid"]
+        ids = set()
+        for sr in (c.get("subranges") or []):
+            m = re.fullmatch(r"([0-9]+)(?:-([0-9]+))?", sr.get("vlans") or "")
+            if not m:
+                continue
+            lo = int(m.group(1)); hi = int(m.group(2) or m.group(1))
+            if hi - lo > 200:
+                continue
+            ids.update(range(lo, hi + 1))
+        wanted[gname] = ids
+    for gname, ids in wanted.items():
+        g = VLANGroup.objects.filter(name=gname).first()
+        if not g:
+            continue
+        stale = VLAN.objects.filter(vlan_group=g).exclude(vid__in=ids)
+        n = stale.count()
+        if n:
+            stale.delete()
+            pruned_vlans += n
+OUT["vlans_pruned"] = pruned_vlans
+
 # ---- devices + cables from hops
 def dev_for(node_id):
     d = Device.objects.filter(serial=node_id).first()

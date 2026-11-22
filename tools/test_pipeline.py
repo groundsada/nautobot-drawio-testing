@@ -250,6 +250,19 @@ def test_remote_script_uses_per_circuit_hop_index():
         "hop index is not per-circuit -- re-runs will not converge"
 
 
+def test_remote_script_prunes_stale_vlans():
+    """A view that only ADDS is not a view.
+
+    Remove a VLAN from the drawing and the row must go, or the DB and the poster
+    diverge silently -- the exact failure mode this project exists to prevent.
+    Asserted on the source because the prune needs Django models to execute.
+    """
+    t = sync_nautobot.REMOTE_TEMPLATE
+    assert "vlans_pruned" in t, "no prune accounting"
+    assert "exclude(vid__in=ids)" in t, "stale VLANs are never removed"
+    assert 'OUT["vlans_pruned"]' in t, "prunes are not reported in the run output"
+
+
 def test_extraction_is_deterministic():
     """Same input must yield byte-identical output, or sync churns."""
     import json
