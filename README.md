@@ -98,15 +98,37 @@ label", and the pod name changes on every rollout. The consequence — the SA ca
 exec into other pods in `mfsada` — is documented in `docs/SECURITY.md` along with
 the mitigation (move Nautobot to its own namespace if that becomes a concern).
 
-## Current gaps
+## Current state (audited against the real 18MB drawing)
 
-- **VLAN sub-ranges are not tagged yet.** They live in separate text boxes, so
-  `subranges` extracts empty. The circuit↔VLAN link needs either tagged boxes or
-  a label-parse pass.
-- **Providers unknown** for all 52 circuits (sentinel used).
-- **Capacities are inferred** from stroke width, marked
-  `capacity_inferred` rather than `capacity` so consumers can tell the
-  difference.
-- **WC07 dropped** — appears in drawing text but has no edge, so it is not a
-  circuit on the graph.
-- Paths are whatever the drawing shows; nothing is fabricated in this repo.
+| | count |
+|---|---|
+| circuits extracted | 52 (WC07 dropped: half-connected edge) |
+| circuit edges tagged | 56 → 55 unique hops |
+| sub-ranges extracted | 63 |
+| VLAN rows in Nautobot | 238, grouped `SC26 WCnn` |
+| cables | 55 |
+| connected interfaces | 110 |
+| re-run behaviour | `created=0, converged=55` |
+
+Health-test query this now supports:
+
+```python
+VLAN.objects.filter(vid=2415).first()   # -> WC30-2, group SC26 WC30
+```
+
+## Remaining gaps, stated plainly
+
+- **Providers are unknown** for all 52 circuits. The drawing does not carry
+  them, so a sentinel `UNKNOWN (not in drawing)` is used rather than inventing
+  a value. This is the largest remaining hole for anything provider-aware.
+- **Capacities are inferred** from stroke width and marked
+  `capacity_inferred`, never `capacity`.
+- **WC07 is a half-connected edge** in the drawing (source but no target) and
+  is dropped with that reason. It is a defect worth fixing in the poster.
+- **Duplicate sub-range boxes**: WC09 is drawn in 8 separate boxes, WC30 in 6,
+  WC31 in 5. Where those boxes disagree on a VLAN span you get the known double
+  allocations. The counter `duplicate_subrange_boxes` reports this per circuit.
+- **No `kind=host` shapes exist yet**, so natural-language host edits are
+  refused by design (the agent will not invent a style).
+- **The full 18MB poster exceeds drawio's headless tile memory** on PNG export;
+  use a smaller file to verify rendering.
