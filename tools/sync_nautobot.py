@@ -78,8 +78,20 @@ def extract(path):
                     "vlans": meta["vlans"],
                     "nres": [int(x) for x in re.findall(r"\d+", meta.get("nres", ""))],
                 })
-            if t.get("source") and t.get("target"):
-                c["hops"].append([t["source"], t["target"]])
+            # A self-loop is not a hop: cabling an interface to itself fails
+            # inside Nautobot and would otherwise reach the database layer.
+            # A circuit may be drawn as SEVERAL edges (WC55 is 4 separate hops
+            # on 4 different node pairs). Appending only one silently dropped
+            # the rest: extraction reported 55 hops for 56 tagged edges.
+            if t.get("source") and t.get("target") and t["source"] != t["target"]:
+                hop = [t["source"], t["target"]]
+                if hop not in c["hops"]:
+                    c["hops"].append(hop)
+            elif t.get("source") == t.get("target") and t.get("source"):
+                c["_src"]["self_loops"] = c["_src"].get("self_loops", 0) + 1
+            elif t.get("source") or t.get("target"):
+                # half-connected edge: count it, do not pretend it is a hop
+                c["_src"]["incomplete_edges"] = c["_src"].get("incomplete_edges", 0) + 1
             continue
 
         if meta.get("kind") == "host":
@@ -96,7 +108,20 @@ def extract(path):
     # emitted as empty records.
     keep = {k: v for k, v in circuits.items()
             if v["hops"] or v["subranges"]}
-    dropped = sorted(set(circuits) - set(keep))
+    # explain WHY each id was dropped instead of emitting a bare list: a
+    # circuit present only as a self-loop or a half-edge is a drawing defect
+    # someone should look at, not a silent omission
+    dropped = []
+    for k in sorted(set(circuits) - set(keep)):
+        why = "no usable hop or VLAN"
+        src = circuits[k]["_src"]
+        if src.get("self_loops"):
+            why = "only self-loop edges"
+        elif src.get("incomplete_edges"):
+            why = "only half-connected edges"
+        elif src.get("incomplete_edges") is None and src.get("self_loops") is None:
+            why = "appears in text but has no edge on the graph"
+        dropped.append("%s (%s)" % (k, why))
 
     return {"circuits": keep, "hosts": hosts,
             "dropped_ids": dropped,
@@ -327,6 +352,10 @@ def main(argv=None):
     print("extracted %d circuits, %d hops, %d hosts" % (n, hops, len(extracted["hosts"])))
     print("  capacity known: %d/%d | provider known: %d/%d | untagged edges: %d"
           % (with_cap, n, with_prov, n, extracted["untagged_edges"]))
+    loops = {k: v["_src"]["self_loops"] for k, v in extracted["circuits"].items()
+             if v["_src"].get("self_loops")}
+    if loops:
+        print("  ! self-loop edges ignored: %s" % loops)
     if extracted.get("dropped_ids"):
         print("  dropped (in text but not on the graph): %s"
               % ", ".join(extracted["dropped_ids"]))

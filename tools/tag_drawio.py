@@ -263,7 +263,11 @@ def main(argv=None):
     if a.mode == "tag":
         if not a.out:
             ap.error("tag mode needs -o")
-        st = tag(a.src, a.out)
+        try:
+            st = tag(a.src, a.out)
+        except ET.ParseError as e:
+            print("not valid XML: %s\n  file: %s" % (e, a.src), file=sys.stderr)
+            return 2
         print("wrapped %(wrapped)d edges (%(labels)d labels), already %(already)d" % st)
         return 0
 
