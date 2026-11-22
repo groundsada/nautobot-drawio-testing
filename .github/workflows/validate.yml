@@ -17,6 +17,9 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
 
+      - name: regression tests (every audited bug)
+        run: python3 tools/test_pipeline.py
+
       - name: tag a fixture and prove styles are unchanged
         run: |
           python3 tools/tag_drawio.py tag examples/fixture.drawio -o /tmp/tagged.drawio
