@@ -26,7 +26,7 @@
           </mxCell>
         </object>
         <object id="loc-hpc" label="SCinet HPC Cluster" kind="location" site="SCinet HPC Cluster" placeholders="0">
-          <mxCell style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;strokeWidth=3;fontSize=18;fontStyle=1;verticalAlign=top;spacingTop=12;dashed=0;" vertex="1" parent="1">
+          <mxCell style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0abfc;strokeColor=#a21caf;strokeWidth=3;fontSize=18;fontStyle=1;verticalAlign=top;spacingTop=12;dashed=0;" vertex="1" parent="1">
             <mxGeometry x="60" y="800" width="420" height="200" as="geometry" />
           </mxCell>
         </object>
