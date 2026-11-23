@@ -26,6 +26,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # the drawio action always checks history (internal_push_before),
+          # even in export mode, so a shallow clone fails with
+          # "This is a shallow git repository"
+          fetch-depth: 0
 
       # The action runs in a container with the workspace mounted, so an
       # absolute path like /tmp/render lands inside the container and vanishes.
