@@ -1,0 +1,57 @@
+# Instructions for Claude when working in this repo
+
+This repo is a **drawio -> Nautobot pipeline**. Read this before editing.
+
+## What the pipeline is
+
+```
+diagrams/sc26.drawio   (hand-authored, the SOURCE)
+        |
+        |  tools/tag_drawio.py       wraps shapes in <object> metadata
+        |  tools/sync_nautobot.py    extracts a model, writes to Nautobot
+        v
+Nautobot               (a MATERIALIZED VIEW, never the source)
+```
+
+**The drawing is authoritative.** Nautobot is downstream. Never hand-edit
+Nautobot to "fix" something — fix the diagram, or the next sync will revert it.
+
+## Non-negotiable invariants
+
+1. **Tagging must be lossless.** `tag_drawio.py check` compares every style,
+   geometry, and topology attribute between input and output. If it reports a
+   difference, the change is wrong, even if the diagram still renders.
+2. **`sync` must be idempotent.** A second run must report `created: 0`. CI
+   enforces this with `--expect-noop`.
+3. **Never invent a value.** If the drawing does not say a provider or a
+   capacity, the answer is `None` or a sentinel, never a plausible guess. A
+   fabricated `2400G` shipped once and survived several reviews because nothing
+   marked it as invented.
+4. **Destructive operations need a gate.** Pruning more than 10% of managed
+   rows requires `--allow-bulk-prune`. A demo sync once deleted 49 of 52 real
+   circuits.
+
+## How to add a new kind of thing (host, circuit, sub-range)
+
+1. Add a sibling shape in the drawing with `<object kind="...">`.
+2. Add extraction in `sync_nautobot.py:extract()`.
+3. Add remote creation in `REMOTE_TEMPLATE`.
+4. Add a test in `tools/test_pipeline.py`, then **mutation-test it**: break the
+   code deliberately and confirm the test fails. A test that cannot fail is
+   worse than no test.
+
+## Commands
+
+```bash
+python3 tools/test_pipeline.py                                    # 30 tests
+python3 tools/tag_drawio.py tag diagrams/sc26.drawio -o /tmp/t.drawio
+python3 tools/tag_drawio.py check diagrams/sc26.drawio /tmp/t.drawio
+python3 tools/sync_nautobot.py --drawio /tmp/t.drawio --dry-run --skip-cluster
+```
+
+## Style
+
+- Comments explain *why*, especially for anything that looks odd. Several
+  `# NOTE:` comments record a bug that was actually hit.
+- No silent fallbacks. If data is missing, report it.
+- Prefer failing loudly over producing plausible-but-wrong output.

@@ -1,0 +1,90 @@
+name: screenshots
+
+# Posts before/after pictures on the PR so a reviewer can see what changed
+# without opening drawio.
+#
+# Why this is not just "run drawio": there is no supported drawio CLI in the
+# GitHub-hosted runners, and the desktop AppImage needs FUSE. The community
+# action below wraps the same xvfb + electron approach in a container.
+#
+# Nautobot screenshots are NOT attempted here. The topology plugin renders
+# client-side (vis.js), so a headless screenshot needs a browser driving the
+# live UI -- it timed out at 60s through a port-forward when tested. What CI can
+# show from Nautobot is the data, which is what /apply posts. Rendering the
+# plugin view is left to the operator.
+
+on:
+  pull_request:
+    paths: ["diagrams/**"]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: render the changed diagram
+        uses: rlespinasse/drawio-export-action@v2
+        with:
+          path: diagrams/sc26.drawio
+          format: png
+          transparent: false
+          output: /tmp/render
+          scale: "2"
+
+      - name: find the rendered file
+        id: find
+        run: |
+          f=$(find /tmp/render -name '*.png' | head -1)
+          echo "file=$f" >> "$GITHUB_OUTPUT"
+          echo "rendered: $f"
+          python3 -c "
+          from struct import unpack
+          d=open('$f','rb').read(33)
+          print('  size:', unpack('>II', d[16:24]))
+          "
+
+      # Committing the PNG to the PR branch means GitHub shows it inline in the
+      # Files-changed view as an image diff, which is better than an attachment.
+      - name: commit the render to the PR branch
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p diagrams/rendered
+          cp "${{ steps.find.outputs.file }}" diagrams/rendered/sc26.png
+          git add diagrams/rendered/sc26.png
+          if git diff --cached --quiet; then
+            echo "no visual change"
+          else
+            git commit -m "chore: update rendered diagram [skip ci]"
+            git push
+          fi
+
+      - name: post the image on the PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = '${{ steps.find.outputs.file }}';
+            const b64 = fs.readFileSync(path).toString('base64');
+            const { data } = await github.rest.repos.createOrUpdateFileContents({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: `.pr-screenshots/pr-${context.issue.number}.png`,
+              message: `screenshot for PR #${context.issue.number}`,
+              content: b64,
+              branch: context.payload.pull_request.head.ref,
+            }).catch(e => ({ data: null }));
+            const sha = context.payload.pull_request.head.sha;
+            const url = `https://raw.githubusercontent.com/${context.repo.owner}/${context.repo.repo}/${sha}/diagrams/rendered/sc26.png`;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `### Rendered diagram\n\n![diagram](${url})\n\n_Rendered headlessly from \`diagrams/sc26.drawio\`. If this image is blank or missing, the diagram failed to render._`
+            });
