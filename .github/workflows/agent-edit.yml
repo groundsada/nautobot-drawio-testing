@@ -97,11 +97,14 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet diagrams/sc26.drawio; then
+          # stage first: `git diff` without --cached reports nothing for a
+          # change that has not been added yet, which made this check always
+          # say "no change" even when the agent had edited the file
+          git add diagrams/sc26.drawio
+          if git diff --cached --quiet; then
             echo "::notice::agent produced no change to the diagram"
             exit 0
           fi
-          git add diagrams/sc26.drawio
           git commit -m "agent: ${{ github.event.comment.body }}"
           git push
 
