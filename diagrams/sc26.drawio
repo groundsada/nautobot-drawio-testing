@@ -30,6 +30,11 @@
             <mxGeometry x="60" y="800" width="420" height="200" as="geometry" />
           </mxCell>
         </object>
+        <object id="loc-test" label="Test Block" kind="location" site="Test Block">
+          <mxCell style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#64748b;strokeWidth=3;fontSize=18;" vertex="1" parent="1">
+            <mxGeometry x="1000" y="120" width="260" height="160" as="geometry" />
+          </mxCell>
+        </object>
       </root>
     </mxGraphModel>
   </diagram>
