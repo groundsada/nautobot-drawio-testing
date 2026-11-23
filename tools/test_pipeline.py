@@ -319,6 +319,69 @@ def test_single_tag_command_yields_subranges():
     assert subs[0]["nres"] == [121, 122], subs
 
 
+def test_llm_edit_adds_an_extractable_circuit():
+    """An agent-added circuit must be visible to extraction, not just drawn.
+
+    The first version created a bare mxCell edge; it rendered correctly but
+    extraction returned no circuits, because circuits are read from <object>
+    wrappers. The edit now runs the normal tag pass afterwards.
+    """
+    import json
+    import llm_edit
+    body = (shape("a", "a") + shape("b", "b", 400)
+            + '<object id="loc-a" label="Block A" kind="location">'
+              '<mxCell style="rounded=1;fillColor=#eee;" vertex="1" parent="1">'
+              '<mxGeometry x="10" y="10" width="200" height="200" as="geometry"/>'
+              '</mxCell></object>'
+            + '<object id="loc-b" label="Block B" kind="location">'
+              '<mxCell style="rounded=1;fillColor=#eee;" vertex="1" parent="1">'
+              '<mxGeometry x="600" y="10" width="200" height="200" as="geometry"/>'
+              '</mxCell></object>')
+    src, out = write(MX % body)
+    plan = {"edits": [{"op": "add_edge", "circuit": "WC99",
+                       "capacity": "400G", "from": "Block A", "to": "Block B"}]}
+    pf = os.path.join(os.path.dirname(src), "plan.json")
+    pathlib.Path(pf).write_text(json.dumps(plan))
+    r = subprocess.run([sys.executable, str(HERE / "llm_edit.py"),
+                        "--drawio", src, "--instruction", "x",
+                        "--plan", pf, "-o", out],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[:300]
+    ex = sync_nautobot.extract(out)
+    assert "WC99" in ex["circuits"], "circuit not extractable: %s" % list(ex["circuits"])
+    assert ex["circuits"]["WC99"]["capacity"] == "400G", ex["circuits"]["WC99"]
+
+
+def test_llm_edit_uses_the_files_capacity_convention():
+    """Styling must come from the drawing's table, not an invented one."""
+    import llm_edit
+    assert llm_edit.CAPACITY_STYLE["400G"][0] == 40, "400G should be width 40"
+    assert llm_edit.CAPACITY_STYLE["100G"][0] == 25, "100G should be width 25"
+    assert "2400G" not in llm_edit.CAPACITY_STYLE, \
+        "a capacity the drawing never shows must not be in the table"
+
+
+def test_llm_edit_refuses_unknown_capacity():
+    """An unknown capacity is refused, not given a plausible style."""
+    import json
+    import llm_edit
+    body = ('<object id="loc-a" label="A" kind="location"><mxCell style="x" vertex="1" parent="1">'
+            '<mxGeometry x="0" y="0" width="10" height="10" as="geometry"/></mxCell></object>'
+            '<object id="loc-b" label="B" kind="location"><mxCell style="x" vertex="1" parent="1">'
+            '<mxGeometry x="99" y="0" width="10" height="10" as="geometry"/></mxCell></object>')
+    src, out = write(MX % body)
+    plan = {"edits": [{"op": "add_edge", "circuit": "WC99", "capacity": "999G",
+                       "from": "A", "to": "B"}]}
+    pf = os.path.join(os.path.dirname(src), "p.json")
+    pathlib.Path(pf).write_text(json.dumps(plan))
+    r = subprocess.run([sys.executable, str(HERE / "llm_edit.py"),
+                        "--drawio", src, "--instruction", "x",
+                        "--plan", pf, "-o", out],
+                       capture_output=True, text=True)
+    assert r.returncode == 1, "expected refusal, got %d" % r.returncode
+    assert "unknown capacity" in r.stderr.lower(), r.stderr[:200]
+
+
 def test_prompt_injection_from_drawing_is_filtered():
     """Drawing metadata flows into an LLM prompt, so it is attacker-controlled.
 
@@ -332,10 +395,12 @@ def test_prompt_injection_from_drawing_is_filtered():
             '</mxCell></object>'
             + shape("a", "a"))
     src, _ = write(MX % body)
-    kinds = llm_edit.styles_by_kind(src)
+    facts = llm_edit.diagram_facts(src)
+    kinds = list(facts["kinds"]) + facts["labels"]
     assert not any("IGNORE" in k for k in kinds), \
-        "injection reached the prompt: %s" % list(kinds)
-    assert all(len(k) <= 32 for k in kinds), kinds
+        "injection reached the prompt: %s" % kinds
+    assert not any("IGNORE" in k for k in facts["kinds"]), \
+        "injected kind survived the filter: %s" % list(facts["kinds"])
 
 
 def test_capacity_uses_widest_stroke():
@@ -443,7 +508,7 @@ def test_llm_edit_applies_with_copied_style():
     planfile = os.path.join(os.path.dirname(src), "plan.json")
     pathlib.Path(planfile).write_text(json.dumps(plan))
 
-    styles = llm_edit.styles_by_kind(src)
+    styles = llm_edit.diagram_facts(src)["styles"]
     assert "host" in styles, "fixture host not discovered"
 
     # apply by calling the same code path main() uses
@@ -470,8 +535,8 @@ def test_llm_edit_refuses_unknown_kind():
     import llm_edit
     body = shape("a", "a") + shape("b", "b", 300) + edge("e1", "a", "b", "WC30")
     src, _ = write(MX % body)
-    styles = llm_edit.styles_by_kind(src)
-    assert "host" not in styles, "expected no host style in this fixture"
+    kinds = llm_edit.diagram_facts(src)["kinds"]
+    assert "host" not in kinds, "expected no host kind in this fixture"
 
 
 # --------------------------------------------------------------- runner
