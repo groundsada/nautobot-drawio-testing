@@ -27,25 +27,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The action runs in a container with the workspace mounted, so an
+      # absolute path like /tmp/render lands inside the container and vanishes.
+      # Output into the repo instead, then verify the file exists before using it.
       - name: render the changed diagram
         uses: rlespinasse/drawio-export-action@v2
         with:
           path: diagrams/sc26.drawio
           format: png
           transparent: false
-          output: /tmp/render
+          output: diagrams/rendered
           scale: "2"
+          action-mode: git
 
-      - name: find the rendered file
+      - name: verify the render exists
         id: find
         run: |
-          f=$(find /tmp/render -name '*.png' | head -1)
+          find . -name '*.png' -newermt '-5 minutes' -print | sed 's/^/  found: /'
+          f=$(find diagrams/rendered -name '*.png' 2>/dev/null | head -1)
+          if [ -z "$f" ]; then
+            echo "::error::drawio produced no PNG -- the diagram may not render"
+            exit 1
+          fi
           echo "file=$f" >> "$GITHUB_OUTPUT"
-          echo "rendered: $f"
           python3 -c "
           from struct import unpack
           d=open('$f','rb').read(33)
-          print('  size:', unpack('>II', d[16:24]))
+          w,h=unpack('>II',d[16:24])
+          print(f'  rendered {w}x{h}')
+          assert w > 100 and h > 100, 'render looks empty'
           "
 
       # Committing the PNG to the PR branch means GitHub shows it inline in the
@@ -65,26 +75,16 @@ jobs:
           fi
 
       - name: post the image on the PR
-        if: always()
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
-            const path = '${{ steps.find.outputs.file }}';
-            const b64 = fs.readFileSync(path).toString('base64');
-            const { data } = await github.rest.repos.createOrUpdateFileContents({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              path: `.pr-screenshots/pr-${context.issue.number}.png`,
-              message: `screenshot for PR #${context.issue.number}`,
-              content: b64,
-              branch: context.payload.pull_request.head.ref,
-            }).catch(e => ({ data: null }));
-            const sha = context.payload.pull_request.head.sha;
-            const url = `https://raw.githubusercontent.com/${context.repo.owner}/${context.repo.repo}/${sha}/diagrams/rendered/sc26.png`;
+            // the previous step committed the PNG to the PR branch, so the raw
+            // URL on that branch is stable and renders inline in the comment
+            const branch = context.payload.pull_request.head.ref;
+            const url = `https://raw.githubusercontent.com/${context.repo.owner}/${context.repo.repo}/${branch}/diagrams/rendered/sc26.png?cachebust=${Date.now()}`;
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `### Rendered diagram\n\n![diagram](${url})\n\n_Rendered headlessly from \`diagrams/sc26.drawio\`. If this image is blank or missing, the diagram failed to render._`
+              body: `### Rendered diagram\n\n![diagram](${url})\n\n_Rendered headlessly from \`diagrams/sc26.drawio\`. If this is blank, the diagram failed to render._`
             });
