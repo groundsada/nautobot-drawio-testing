@@ -33,9 +33,11 @@ jobs:
           sudo apt-get install -y -qq xvfb libasound2t64 libgbm1 libnss3 \
             libxss1 libgtk-3-0 || sudo apt-get install -y -qq xvfb libasound2 \
             libgbm1 libnss3 libxss1 libgtk-3-0
-          VER=$(curl -s https://api.github.com/repos/jgraph/drawio-desktop/releases/latest \
-                | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"].lstrip("v"))')
-          echo "drawio $VER"
+          # pinned, not fetched from the API: the unauthenticated call is
+          # rate-limited on shared runners (KeyError: 'tag_name' when it
+          # returns a 403 body). Bump deliberately.
+          VER=32.7.4
+          echo "drawio $VER (pinned)"
           # asset name is drawio-x86_64-<ver>.AppImage (not amd64); a wrong
           # guess silently downloads the GitHub 404 page and chmod then fails
           # with "line 1: Not: command not found"
