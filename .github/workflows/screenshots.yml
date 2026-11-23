@@ -1,24 +1,21 @@
 name: screenshots
 
-# Posts before/after pictures on the PR so a reviewer can see what changed
-# without opening drawio.
+# Renders diagrams/sc26.drawio headlessly and posts the image on the PR.
 #
-# Why this is not just "run drawio": there is no supported drawio CLI in the
-# GitHub-hosted runners, and the desktop AppImage needs FUSE. The community
-# action below wraps the same xvfb + electron approach in a container.
-#
-# Nautobot screenshots are NOT attempted here. The topology plugin renders
-# client-side (vis.js), so a headless screenshot needs a browser driving the
-# live UI -- it timed out at 60s through a port-forward when tested. What CI can
-# show from Nautobot is the data, which is what /apply posts. Rendering the
-# plugin view is left to the operator.
+# Uses drawio-desktop directly rather than a wrapper action. Three attempts at
+# rlespinasse/drawio-export-action failed for reasons unrelated to this repo:
+#   * output paths resolve inside the action's container, not the workspace
+#   * it inspects git history even in export mode ("shallow git repository")
+#   * 'export' is not a valid action-mode despite the docs implying otherwise
+# Driving xvfb + the AppImage directly is fewer moving parts and is exactly
+# what works locally.
 
 on:
   pull_request:
     paths: ["diagrams/**"]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
@@ -27,68 +24,64 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # the drawio action always checks history (internal_push_before),
-          # even in export mode, so a shallow clone fails with
-          # "This is a shallow git repository"
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
-      # The action runs in a container with the workspace mounted, so an
-      # absolute path like /tmp/render lands inside the container and vanishes.
-      # Output into the repo instead, then verify the file exists before using it.
-      - name: render the changed diagram
-        uses: rlespinasse/drawio-export-action@v2
-        with:
-          path: diagrams/sc26.drawio
-          format: png
-          transparent: false
-          output: diagrams/rendered
-          scale: "2"
-
-      - name: verify the render exists
-        id: find
+      - name: install drawio
         run: |
-          find . -name '*.png' -newermt '-5 minutes' -print | sed 's/^/  found: /'
-          f=$(find diagrams/rendered -name '*.png' 2>/dev/null | head -1)
-          if [ -z "$f" ]; then
-            echo "::error::drawio produced no PNG -- the diagram may not render"
-            exit 1
-          fi
-          echo "file=$f" >> "$GITHUB_OUTPUT"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb libasound2t64 libgbm1 libnss3 \
+            libxss1 libgtk-3-0 || sudo apt-get install -y -qq xvfb libasound2 \
+            libgbm1 libnss3 libxss1 libgtk-3-0
+          VER=$(curl -s https://api.github.com/repos/jgraph/drawio-desktop/releases/latest \
+                | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"].lstrip("v"))')
+          echo "drawio $VER"
+          curl -sL -o /tmp/drawio.AppImage \
+            "https://github.com/jgraph/drawio-desktop/releases/download/v${VER}/drawio-amd64-${VER}.AppImage"
+          chmod +x /tmp/drawio.AppImage
+          /tmp/drawio.AppImage --appimage-extract >/dev/null
+          echo "extracted: $(ls squashfs-root/drawio-desktop | head -1)"
+
+      - name: render
+        run: |
+          xvfb-run -a ./squashfs-root/drawio-desktop \
+            --no-sandbox --disable-gpu --export --format png --scale 2 \
+            --output diagrams/rendered diagrams/sc26.drawio
+          ls -l diagrams/rendered/ || true
+
+      - name: verify the render is real
+        id: check
+        run: |
+          f=$(find diagrams/rendered -name '*.png' | head -1)
+          [ -n "$f" ] || { echo "::error::no PNG produced"; exit 1; }
           python3 -c "
           from struct import unpack
           d=open('$f','rb').read(33)
+          assert d[:4]==b'\x89PNG', 'not a PNG'
           w,h=unpack('>II',d[16:24])
-          print(f'  rendered {w}x{h}')
-          assert w > 100 and h > 100, 'render looks empty'
+          print(f'rendered {w}x{h}')
+          assert w>200 and h>200, f'render looks empty: {w}x{h}'
           "
+          echo "file=$f" >> "$GITHUB_OUTPUT"
 
-      # Committing the PNG to the PR branch means GitHub shows it inline in the
-      # Files-changed view as an image diff, which is better than an attachment.
-      - name: commit the render to the PR branch
+      - name: commit the render
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          mkdir -p diagrams/rendered
-          cp "${{ steps.find.outputs.file }}" diagrams/rendered/sc26.png
-          git add diagrams/rendered/sc26.png
-          if git diff --cached --quiet; then
-            echo "no visual change"
-          else
-            git commit -m "chore: update rendered diagram [skip ci]"
-            git push
-          fi
+          git add diagrams/rendered
+          if git diff --cached --quiet; then echo "no visual change"; exit 0; fi
+          git commit -m "chore: update rendered diagram [skip ci]"
+          git push
 
-      - name: post the image on the PR
+      - name: post the image
         uses: actions/github-script@v7
         with:
           script: |
-            // the previous step committed the PNG to the PR branch, so the raw
-            // URL on that branch is stable and renders inline in the comment
             const branch = context.payload.pull_request.head.ref;
-            const url = `https://raw.githubusercontent.com/${context.repo.owner}/${context.repo.repo}/${branch}/diagrams/rendered/sc26.png?cachebust=${Date.now()}`;
+            const url = `https://raw.githubusercontent.com/${context.repo.owner}/${context.repo.repo}/${branch}/diagrams/rendered/sc26.png`;
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `### Rendered diagram\n\n![diagram](${url})\n\n_Rendered headlessly from \`diagrams/sc26.drawio\`. If this is blank, the diagram failed to render._`
+              body: `### Rendered diagram\n\n![diagram](${url}?t=${Date.now()})\n\n_Rendered from \`diagrams/sc26.drawio\` in CI._`
             });
