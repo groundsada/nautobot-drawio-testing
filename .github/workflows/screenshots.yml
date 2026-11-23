@@ -36,8 +36,13 @@ jobs:
           VER=$(curl -s https://api.github.com/repos/jgraph/drawio-desktop/releases/latest \
                 | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"].lstrip("v"))')
           echo "drawio $VER"
-          curl -sL -o /tmp/drawio.AppImage \
-            "https://github.com/jgraph/drawio-desktop/releases/download/v${VER}/drawio-amd64-${VER}.AppImage"
+          # asset name is drawio-x86_64-<ver>.AppImage (not amd64); a wrong
+          # guess silently downloads the GitHub 404 page and chmod then fails
+          # with "line 1: Not: command not found"
+          URL="https://github.com/jgraph/drawio-desktop/releases/download/v${VER}/drawio-x86_64-${VER}.AppImage"
+          curl -fsSL -o /tmp/drawio.AppImage "$URL"
+          head -c 4 /tmp/drawio.AppImage | grep -q ELF || {
+            echo "::error::downloaded file is not an AppImage"; exit 1; }
           chmod +x /tmp/drawio.AppImage
           /tmp/drawio.AppImage --appimage-extract >/dev/null
           echo "extracted: $(ls squashfs-root/drawio-desktop | head -1)"
