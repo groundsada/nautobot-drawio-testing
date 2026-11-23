@@ -89,3 +89,28 @@ Measured results with the applied Role:
 Note: `kubectl delete --dry-run=client` reports success for this SA even though
 a real delete is Forbidden — dry-run does not perform an authorization check.
 Only a live attempt proves anything.
+
+## Prompt injection via drawing content
+
+`tools/llm_edit.py` sends part of the drawing to an LLM. Metadata in a `.drawio`
+file is **attacker-controlled text**: anyone who can edit or submit a diagram
+controls what the model reads.
+
+Measured before the fix -- a shape with `kind="host{{IGNORE ALL PRIOR
+INSTRUCTIONS}}"` put that string straight into the prompt.
+
+Mitigations now in place:
+
+1. Kind names are filtered to `^[A-Za-z][A-Za-z0-9_-]{0,31}$` before they reach
+   the prompt, so instruction-shaped text cannot survive.
+2. The operator's request is labelled `OPERATOR INSTRUCTION:` and file content
+   is confined to a "kinds available" list, so drawing text cannot pose as
+   instructions.
+3. An edit plan that tries to author a `style` is refused. Styles are only ever
+   copied from an existing sibling, which also means the model cannot smuggle
+   arbitrary style strings into the diagram.
+
+Residual risk: a kind name is still free text within the safe charset, so the
+model sees *something* from the file. The blast radius is limited to choosing
+among existing kinds -- the tool will not invent a style, will not add shapes of
+a kind absent from the file, and writes only a new file for human review.

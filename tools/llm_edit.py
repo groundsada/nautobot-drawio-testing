@@ -63,13 +63,21 @@ def call_llm(prompt):
         return None, str(e)[:200]
 
 
+SAFE_KIND = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,31}$")
+
+
 def styles_by_kind(path):
-    """Map kind -> an existing style string, harvested from the file."""
+    """Map kind -> an existing style string, harvested from the file.
+
+    Kinds are filtered to a conservative character set. Metadata in a .drawio
+    file is attacker-controlled text that flows into an LLM prompt, so a kind
+    of 'host{{IGNORE ALL PRIOR INSTRUCTIONS}}' must never reach the model.
+    """
     out = {}
     model = tag_drawio.read(path)
     for t in model["tagged"]:
         k = t["meta"].get("kind")
-        if k and t["style"] and k not in out:
+        if k and SAFE_KIND.match(k) and t["style"] and k not in out:
             out[k] = t["style"]
     # untagged vertices: fall back to any rounded box as the 'box' style
     import xml.etree.ElementTree as ET
@@ -89,7 +97,10 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     styles = styles_by_kind(a.drawio)
-    prompt = ("File kinds available: %s\nInstruction: %s"
+    # Only sanitised kind names from the file are included; the instruction is
+    # the operator's own text and is marked as such so drawing content cannot
+    # masquerade as instructions.
+    prompt = ("Kinds available in the file: %s\n\nOPERATOR INSTRUCTION:\n%s"
               % (sorted(styles), a.instruction))
     text, err = call_llm(prompt)
     if err:
@@ -101,6 +112,11 @@ def main(argv=None):
     except Exception:
         print("could not parse LLM output:\n%s" % text[:800], file=sys.stderr)
         return 1
+
+    for e in plan.get("edits", []):
+        if e.get("style") or (e.get("attrs") or {}).get("style"):
+            print("agent tried to author a style -- refusing", file=sys.stderr)
+            return 1
 
     if plan.get("error"):
         print("agent declined: %s" % plan["error"], file=sys.stderr)
