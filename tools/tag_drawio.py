@@ -45,12 +45,36 @@ RESERVED = {"label", "id", "placeholders", "tooltip", "link", "tags",
 
 
 # --------------------------------------------------------------- helpers
-def style_capacity(style):
-    """Infer capacity from a stroke style the way the drawing encodes it.
+# Stroke width -> capacity, LEARNED from the real SC26 drawing rather than
+# invented. Counting (strokeWidth, capacity) pairs where an edge carries an
+# explicit capacity label gives:
+#
+#   width  40 -> 400G x30     width 120 -> 1.2T x8
+#   width  80 -> 800G x8      width  20 -> 400G x6
+#   width  60 -> 400G x5      width  10 -> 10G  x3
+#   width  25 -> 100G x2      width 240 -> 2.4T x3
+#
+# Two things this proves:
+#   1. The mapping is NOT injective. 400G appears at width 20, 40 and 60, so a
+#      single threshold cannot recover capacity. Any such guess is wrong some
+#      of the time.
+#   2. An earlier hand-written table claimed width<=4 is 100G and width 10 is
+#      200G. The drawing says width 10 is 10G. The table was fiction.
+#
+# So the mapping below only covers widths seen in the file, and everything else
+# returns None -- unknown is a better answer than a plausible invention.
+LEARNED_WIDTHS = {
+    10.0: "10G", 20.0: "400G", 25.0: "100G", 40.0: "400G",
+    60.0: "400G", 80.0: "800G", 100.0: "1T", 120.0: "1.2T",
+    160.0: "1.6T", 240.0: "2.4T",
+}
 
-    Tom's file carries capacity both as a label and as stroke attributes. When
-    a label is absent, the stroke is still evidence -- but it is a guess, so it
-    is returned with a marker rather than as fact.
+
+def style_capacity(style):
+    """Capacity implied by a stroke width, or None if the width is unseen.
+
+    Returns None rather than guessing: the real drawing reuses several widths
+    for the same capacity, so an unseen width carries no reliable information.
     """
     m = re.search(r"strokeWidth=([\d.]+)", style or "")
     if not m:
@@ -59,12 +83,7 @@ def style_capacity(style):
         w = float(m.group(1))
     except ValueError:
         return None
-    # observed in the source drawing: 400G -> 20px, 100G -> thinner
-    if w >= 18:
-        return "400G"
-    if w >= 8:
-        return "200G"
-    return "100G"
+    return LEARNED_WIDTHS.get(w)
 
 
 def label_text(cell):

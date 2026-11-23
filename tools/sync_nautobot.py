@@ -67,12 +67,30 @@ def extract(path):
                 "cid": cid, "capacity": None, "provider": None,
                 "subranges": [], "hops": [], "_src": {},
             })
-            if meta.get("capacity"):
-                c["capacity"] = meta["capacity"]
-                c["_src"]["capacity"] = "drawing"
-            elif meta.get("capacity_inferred"):
-                c["capacity"] = meta["capacity_inferred"]
-                c["_src"]["capacity"] = "inferred-from-stroke"
+            # A circuit usually has several edges and only ONE carries the
+            # real capacity, plus thin host legs that would mislead. Taking the
+            # last edge seen reported 100G for a 400G circuit. Rank sources
+            # (drawing > inferred) and keep the WIDEST stroke within a source.
+            rank = {"drawing": 2, "inferred-from-stroke": 1}
+            cap_val = meta.get("capacity")
+            cap_src = "drawing"
+            if not cap_val and meta.get("capacity_inferred"):
+                cap_val = meta["capacity_inferred"]
+                cap_src = "inferred-from-stroke"
+            if cap_val:
+                cur_src = c["_src"].get("capacity")
+                if rank.get(cap_src, 0) > rank.get(cur_src, 0):
+                    c["capacity"] = cap_val
+                    c["_src"]["capacity"] = cap_src
+                elif cap_src == cur_src:
+                    def gbps(v):
+                        v = (v or "").upper().replace("G", "").replace("T", "")
+                        try:
+                            return float(v) * (1000 if "T" in (cap_val or "").upper() else 1)
+                        except ValueError:
+                            return 0.0
+                    if gbps(cap_val) > gbps(c["capacity"]):
+                        c["capacity"] = cap_val
             if meta.get("provider"):
                 c["provider"] = meta["provider"]
                 c["_src"]["provider"] = "drawing"
@@ -318,9 +336,21 @@ if not DRY:
         cab.delete()
         pruned_cables += 1
     # only our own rows: never prune something a human made
-    stale_circuits = [c for c in Circuit.objects.filter(
-                          description__contains="managed-by=drawio-pipeline")
-                      if c.cid not in want_cids]
+    managed = Circuit.objects.filter(
+        description__contains="managed-by=drawio-pipeline")
+    stale_circuits = [c for c in managed if c.cid not in want_cids]
+    total_managed = managed.count()
+    if (stale_circuits and total_managed
+            and len(stale_circuits) > max(3, total_managed * 0.1)
+            and not PAYLOAD.get("allow_bulk_prune")):
+        # Syncing a 3-circuit demo against a 52-circuit database would delete
+        # 49 real rows. That is the tool working as designed and the design
+        # being dangerous, so bulk deletion must be asked for explicitly.
+        OUT["errors"].append(
+            "refusing to prune %d of %d managed circuits; pass "
+            "--allow-bulk-prune if this is intended"
+            % (len(stale_circuits), total_managed))
+        stale_circuits = []
     for c in stale_circuits:
         c.delete()
         pruned_circuits += 1
@@ -463,6 +493,10 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--expect-noop", action="store_true")
+    ap.add_argument("--allow-bulk-prune", action="store_true",
+                    help="permit pruning more than 10%% of managed rows. "
+                         "Without this, syncing a small test drawing against a "
+                         "populated database deletes real data.")
     ap.add_argument("--skip-cluster", action="store_true",
                     help="extract and report only; do not contact Kubernetes")
     ap.add_argument("--json", help="write extracted model here")
@@ -498,6 +532,7 @@ def main(argv=None):
         "circuits": list(extracted["circuits"].values()),
         "hosts": extracted["hosts"],
         "dry_run": bool(a.dry_run),
+        "allow_bulk_prune": bool(a.allow_bulk_prune),
     }
     return apply_remote(payload, expect_noop=a.expect_noop)
 

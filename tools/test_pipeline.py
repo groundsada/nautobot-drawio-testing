@@ -319,6 +319,45 @@ def test_single_tag_command_yields_subranges():
     assert subs[0]["nres"] == [121, 122], subs
 
 
+def test_capacity_uses_widest_stroke():
+    """A circuit's thin host leg must not override its thick circuit leg.
+
+    Measured: a 400G circuit with a thin host edge reported 100G because the
+    last edge seen won.
+    """
+    body = (shape("a", "a") + shape("b", "b", 300) + shape("c", "c", 600)
+            + edge("e1", "a", "b", "WC30", style="strokeWidth=40;")
+            + edge("e2", "b", "c", "WC30", style="strokeWidth=3;"))
+    out = tagged(MX % body)
+    ex = sync_nautobot.extract(out)
+    assert ex["circuits"]["WC30"]["capacity"] == "400G", \
+        "thin leg overrode the thick one: %s" % ex["circuits"]["WC30"]["capacity"]
+
+
+def test_capacity_mapping_is_learned_not_invented():
+    """Widths come from the real drawing, and unseen widths return None.
+
+    The drawing maps 400G to widths 20, 40 AND 60, so the mapping is not
+    injective -- a threshold guess is wrong some of the time.
+    """
+    assert tag_drawio.style_capacity("strokeWidth=40;") == "400G"
+    assert tag_drawio.style_capacity("strokeWidth=10;") == "10G", \
+        "width 10 is 10G in the real drawing, not 100G"
+    assert tag_drawio.style_capacity("strokeWidth=7;") is None, \
+        "an unseen width must return None rather than guess"
+
+
+def test_bulk_prune_guard_exists():
+    """Syncing a 3-circuit demo against 52 real rows deleted 49 of them.
+
+    The tool was working as designed; the design was dangerous. Bulk deletion
+    now requires an explicit flag.
+    """
+    t = sync_nautobot.REMOTE_TEMPLATE
+    assert "allow_bulk_prune" in t, "no bulk-prune guard"
+    assert "refusing to prune" in t, "guard does not report"
+
+
 def test_prune_is_scoped_to_owned_rows():
     """The pruner must never delete a row the pipeline did not create.
 
