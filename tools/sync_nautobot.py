@@ -426,7 +426,7 @@ for c in PAYLOAD["circuits"]:
             cab.add_termination(ia, "A")
             cab.add_termination(ib, "B")
             cab.save()
-            note("created" if created_cable else "converged")
+            note("created" if created_cable else "cables_reterminated")
         except Exception as e:
             OUT["errors"].append("%s: %s" % (label, str(e)[:120]))
             note("skipped")
