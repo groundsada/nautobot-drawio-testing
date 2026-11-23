@@ -1,0 +1,36 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<mxfile host="drawio" pages="1">
+  <diagram name="sc26" id="sc26-1">
+    <mxGraphModel grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <object id="loc-scinet-noc" label="SCinet NOC" kind="location" site="SCinet NOC" placeholders="0">
+          <mxCell style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;strokeWidth=3;fontSize=18;fontStyle=1;verticalAlign=top;spacingTop=12;dashed=0;" vertex="1" parent="1">
+            <mxGeometry x="60" y="120" width="420" height="620" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="loc-starlight" label="StarLight Booth 3651" kind="location" site="StarLight Booth 3651" placeholders="0">
+          <mxCell style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#ea580c;strokeWidth=3;fontSize=18;fontStyle=1;verticalAlign=top;spacingTop=12;dashed=0;" vertex="1" parent="1">
+            <mxGeometry x="620" y="120" width="300" height="190" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="loc-caltech" label="Caltech Booth 5438" kind="location" site="Caltech Booth 5438" placeholders="0">
+          <mxCell style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#ea580c;strokeWidth=3;fontSize=18;fontStyle=1;verticalAlign=top;spacingTop=12;dashed=0;" vertex="1" parent="1">
+            <mxGeometry x="620" y="360" width="300" height="190" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="loc-ciena" label="Ciena Booth 5035" kind="location" site="Ciena Booth 5035" placeholders="0">
+          <mxCell style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#ea580c;strokeWidth=3;fontSize=18;fontStyle=1;verticalAlign=top;spacingTop=12;dashed=0;" vertex="1" parent="1">
+            <mxGeometry x="620" y="600" width="300" height="190" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="loc-hpc" label="SCinet HPC Cluster" kind="location" site="SCinet HPC Cluster" placeholders="0">
+          <mxCell style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;strokeWidth=3;fontSize=18;fontStyle=1;verticalAlign=top;spacingTop=12;dashed=0;" vertex="1" parent="1">
+            <mxGeometry x="60" y="800" width="420" height="200" as="geometry" />
+          </mxCell>
+        </object>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
