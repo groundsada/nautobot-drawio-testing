@@ -52,6 +52,7 @@ def extract(path):
     model = tag_drawio.read(path)
     circuits = {}
     hosts = []
+    locations = []
 
     for t in model["tagged"]:
         meta = t["meta"]
@@ -116,6 +117,13 @@ def extract(path):
                 c["_src"]["incomplete_edges"] = c["_src"].get("incomplete_edges", 0) + 1
             continue
 
+        if meta.get("kind") == "location":
+            name = meta.get("site") or t["label"]
+            if name:
+                locations.append({"name": name.strip(),
+                                  "node_id": t["id"]})
+            continue
+
         if meta.get("kind") == "subrange":
             for chunk in (meta.get("subs") or "").split(","):
                 chunk = chunk.strip()
@@ -171,7 +179,7 @@ def extract(path):
             why = "appears in text but has no edge on the graph"
         dropped.append("%s (%s)" % (k, why))
 
-    return {"circuits": keep, "hosts": hosts,
+    return {"circuits": keep, "hosts": hosts, "locations": locations,
             "dropped_ids": dropped,
             "untagged_edges": model["untagged_edges"]}
 
@@ -207,6 +215,22 @@ def provider(name):
         p, _ = Provider.objects.get_or_create(name=name)
         prov_cache[name] = p
     return prov_cache[name]
+
+# ---- locations (from kind=location blocks in the drawing)
+from nautobot.dcim.models import LocationType
+site_t, _ = LocationType.objects.get_or_create(name="Site",
+                                               defaults={"nestable": True})
+want_locs = []
+for loc in PAYLOAD.get("locations") or []:
+    want_locs.append(loc["name"])
+    if DRY:
+        note("updated" if Location.objects.filter(name=loc["name"]).exists()
+             else "created")
+        continue
+    Location.objects.update_or_create(
+        name=loc["name"],
+        defaults={"location_type": site_t, "status": st})
+OUT["locations"] = len(want_locs)
 
 # ---- circuits
 for c in PAYLOAD["circuits"]:
@@ -513,7 +537,8 @@ def main(argv=None):
     hops = sum(len(c["hops"]) for c in extracted["circuits"].values())
     with_cap = sum(1 for c in extracted["circuits"].values() if c["capacity"])
     with_prov = sum(1 for c in extracted["circuits"].values() if c["provider"])
-    print("extracted %d circuits, %d hops, %d hosts" % (n, hops, len(extracted["hosts"])))
+    print("extracted %d circuits, %d hops, %d hosts, %d locations"
+          % (n, hops, len(extracted["hosts"]), len(extracted["locations"])))
     print("  capacity known: %d/%d | provider known: %d/%d | untagged edges: %d"
           % (with_cap, n, with_prov, n, extracted["untagged_edges"]))
     loops = {k: v["_src"]["self_loops"] for k, v in extracted["circuits"].items()
@@ -531,6 +556,7 @@ def main(argv=None):
     payload = {
         "circuits": list(extracted["circuits"].values()),
         "hosts": extracted["hosts"],
+        "locations": extracted["locations"],
         "dry_run": bool(a.dry_run),
         "allow_bulk_prune": bool(a.allow_bulk_prune),
     }
