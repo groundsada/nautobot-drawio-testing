@@ -43,7 +43,6 @@ jobs:
           transparent: false
           output: diagrams/rendered
           scale: "2"
-          action-mode: export
 
       - name: verify the render exists
         id: find
