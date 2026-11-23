@@ -30,6 +30,10 @@
             <mxGeometry x="60" y="800" width="420" height="200" as="geometry" />
           </mxCell>
         </object>
+        <object id="circ-wc99-1" circuit="WC99" kind="circuit" circuits="WC99" capacity_inferred="400G" source="loc-scinet-noc" target="loc-caltech"><mxCell style="endArrow=none;html=1;rounded=0;strokeWidth=40;strokeColor=#3399FF;" edge="1" parent="1" source="loc-scinet-noc" target="loc-caltech"><mxGeometry relative="1" as="geometry" />
+        </mxCell></object><mxCell id="lbl-wc99-1" value="WC99  400G" style="edgeLabel;html=1;fontSize=13;fontStyle=1;labelBackgroundColor=#ffffff;" vertex="1" parent="circ-wc99-1">
+          <mxGeometry x="0.5" relative="1" as="geometry" />
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>
