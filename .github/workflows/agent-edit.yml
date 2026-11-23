@@ -1,0 +1,127 @@
+name: agent edit
+
+# Comment on a PR to have an agent change the diagram.
+#
+#   /draw add a 400G circuit WC99 between SCinet NOC and Caltech Booth 5438
+#
+# The agent edits diagrams/sc26.drawio, commits to the PR branch, and the plan
+# job then posts the resulting model. NOTHING reaches Nautobot from here --
+# that still needs /apply. Two human gates on purpose: review the edit, then
+# authorise the write.
+#
+# Requires secret NRP_AUTH_TOKEN and variable NRP_BASE_URL. If they are absent
+# the job says so and exits cleanly rather than failing every comment.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  edit:
+    # only a PR comment starting with /draw, by someone with write access
+    if: >
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/draw ') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+               github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    steps:
+      - name: check the agent is configured
+        id: cfg
+        env:
+          TOKEN: ${{ secrets.NRP_AUTH_TOKEN }}
+          BASE: ${{ vars.NRP_BASE_URL }}
+        run: |
+          if [ -z "$TOKEN" ] || [ -z "$BASE" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::NRP_AUTH_TOKEN / NRP_BASE_URL not set; skipping"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.cfg.outputs.configured == 'true'
+        with:
+          ref: ${{ github.event.issue.pull_request.head.ref || github.head_ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        if: steps.cfg.outputs.configured == 'true'
+        with: {python-version: "3.12"}
+
+      - name: check out the PR branch
+        if: steps.cfg.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr checkout ${{ github.event.issue.number }}
+
+      - name: run the agent
+        if: steps.cfg.outputs.configured == 'true'
+        id: agent
+        env:
+          NRP_AUTH_TOKEN: ${{ secrets.NRP_AUTH_TOKEN }}
+          NRP_BASE_URL: ${{ vars.NRP_BASE_URL }}
+          NRP_ANTHROPIC_MODEL: ${{ vars.NRP_MODEL || 'deepseek-v4-flash' }}
+          INSTRUCTION: ${{ github.event.comment.body }}
+        run: |
+          # strip the leading '/draw ' command word
+          python3 - <<'PY'
+          import os, subprocess, sys
+          instruction = os.environ["INSTRUCTION"].split(" ", 1)[1].strip()
+          r = subprocess.run([sys.executable, "tools/llm_edit.py",
+                              "--drawio", "diagrams/sc26.drawio",
+                              "--instruction", instruction,
+                              "-o",       "diagrams/sc26.drawio",
+                              "--json",   "/tmp/plan.json"],
+                             capture_output=True, text=True)
+          print(r.stdout)
+          print(r.stderr, file=sys.stderr)
+          sys.exit(r.returncode)
+          PY
+
+      - name: verify the edit before committing
+        if: steps.cfg.outputs.configured == 'true' && success()
+        run: |
+          python3 tools/test_pipeline.py
+          python3 tools/tag_drawio.py check diagrams/sc26.drawio diagrams/sc26.drawio
+          python3 tools/sync_nautobot.py --drawio diagrams/sc26.drawio \
+            --dry-run --skip-cluster
+
+      - name: commit to the PR branch
+        if: steps.cfg.outputs.configured == 'true' && success()
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet diagrams/sc26.drawio; then
+            echo "::notice::agent produced no change to the diagram"
+            exit 0
+          fi
+          git add diagrams/sc26.drawio
+          git commit -m "agent: ${{ github.event.comment.body }}"
+          git push
+
+      - name: report back on the PR
+        if: always() && steps.cfg.outputs.configured == 'true'
+        uses: actions/github-script@v7
+        env:
+          OUTCOME: ${{ steps.agent.outcome }}
+        with:
+          script: |
+            const ok = process.env.OUTCOME === 'success';
+            const plan = require('fs').existsSync('/tmp/plan.json')
+              ? require('fs').readFileSync('/tmp/plan.json', 'utf8').slice(0, 1200)
+              : '(no plan produced)';
+            const body = ok
+              ? `### Agent edit applied to this PR\n\n\`\`\`json\n${plan}\n\`\`\`\n\nThe diagram was changed on this branch. Review it, then comment \`/apply\` to write it to Nautobot.`
+              : `### Agent edit failed\n\nSee the [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}). Nothing was committed.`;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
