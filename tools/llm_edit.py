@@ -137,7 +137,9 @@ def call_llm(prompt, model=None):
     import urllib.request
     body = json.dumps({
         "model": model or os.environ.get("NRP_ANTHROPIC_MODEL", "claude"),
-        "max_tokens": 1500,
+        # reasoning models spend part of this budget thinking before they
+        # answer; at 1500 a six-device request came back cut off mid-name
+        "max_tokens": 16000,
         "system": SYS,
         "messages": [{"role": "user", "content": prompt}],
     }).encode()
@@ -153,7 +155,11 @@ def call_llm(prompt, model=None):
         try:
             with urllib.request.urlopen(req, timeout=300) as r:
                 d = json.loads(r.read())
-            return d["content"][0]["text"], None
+            text = "".join(b.get("text", "") for b in d.get("content", [])
+                           if b.get("type") == "text")
+            if d.get("stop_reason") == "max_tokens":
+                return None, "model output truncated at max_tokens"
+            return text, None
         except Exception as e:        # noqa: BLE001
             err = str(e)[:200]
             if "timed out" not in err:
