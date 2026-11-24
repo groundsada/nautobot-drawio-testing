@@ -18,7 +18,7 @@
         </object>
         <object kind="location" site="SCinet HPC Cluster" id="loc-hpc" label="SCinet HPC Cluster">
           <mxCell style="fontFamily=Helvetica;rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#f5f3ff;strokeColor=#7c3aed;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0f172a;align=left;verticalAlign=top;spacingTop=12;spacingLeft=18;" vertex="1" parent="1">
-            <mxGeometry x="40" y="730" width="380" height="170" as="geometry" />
+            <mxGeometry x="40" y="730" width="380" height="292" as="geometry" />
           </mxCell>
         </object>
         <object kind="location" site="StarLight Booth 3651" id="loc-starlight" label="StarLight Booth 3651">
@@ -119,6 +119,76 @@
           </mxCell>
         </object>
         <mxCell id="lbl-wc54-1" value="WC54 · 800G" style="edgeLabel;html=1;fontSize=12;fontStyle=1;fontColor=#0f172a;labelBackgroundColor=#ffffff;labelBorderColor=#7c3aed;spacingLeft=6;spacingRight=6;" vertex="1" parent="circ-wc54-1">
+          <mxGeometry x="0" relative="1" as="geometry" />
+        </mxCell>
+        <object id="dev-server-1-1" label="server-1" kind="device" role="server" location="loc-hpc">
+          <mxCell style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fontFamily=Helvetica;fillColor=#334155;strokeColor=#1e293b;fontColor=#ffffff;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+            <mxGeometry x="64" y="954" width="104" height="40" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="dev-server-2-1" label="server-2" kind="device" role="server" location="loc-hpc">
+          <mxCell style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fontFamily=Helvetica;fillColor=#334155;strokeColor=#1e293b;fontColor=#ffffff;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+            <mxGeometry x="182" y="954" width="104" height="40" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="dev-server-3-1" label="server-3" kind="device" role="server" location="loc-hpc">
+          <mxCell style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fontFamily=Helvetica;fillColor=#334155;strokeColor=#1e293b;fontColor=#ffffff;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+            <mxGeometry x="300" y="954" width="104" height="40" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="dev-ifm-1" label="IFM" kind="device" role="module" location="loc-hpc">
+          <mxCell style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fontFamily=Helvetica;fillColor=#7e22ce;strokeColor=#581c87;fontColor=#ffffff;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+            <mxGeometry x="246" y="868" width="104" height="40" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="dev-scinet-hpc-cluster-cisco-switch-1" label="SCinet HPC Cluster Cisco switch" kind="device" role="switch" location="loc-hpc">
+          <mxCell style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fontFamily=Helvetica;fillColor=#0f766e;strokeColor=#134e4a;fontColor=#ffffff;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+            <mxGeometry x="246" y="782" width="104" height="40" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="dev-noka-3-1" label="noka-3" kind="device" role="router" location="loc-scinet-noc">
+          <mxCell style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fontFamily=Helvetica;fillColor=#1e3a8a;strokeColor=#172554;fontColor=#ffffff;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+            <mxGeometry x="246" y="602" width="104" height="40" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="link-1" label="" kind="link" capacity="100G" count="1" source="dev-server-1-1" target="dev-ifm-1">
+          <mxCell style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=24;endArrow=none;html=1;jumpStyle=gap;strokeWidth=2;strokeColor=#111827;exitX=0.8;exitY=0;exitDx=0;exitDy=0;entryX=0.2;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="dev-server-1-1" target="dev-ifm-1">
+            <mxGeometry relative="1" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="lbl-link-1" value="100G" style="edgeLabel;html=1;fontSize=11;fontColor=#334155;labelBackgroundColor=#ffffff;" vertex="1" parent="link-1">
+          <mxGeometry x="0" relative="1" as="geometry" />
+        </mxCell>
+        <object id="link-2" label="" kind="link" capacity="100G" count="1" source="dev-server-2-1" target="dev-ifm-1">
+          <mxCell style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=24;endArrow=none;html=1;jumpStyle=gap;strokeWidth=2;strokeColor=#111827;exitX=0.8;exitY=0;exitDx=0;exitDy=0;entryX=0.3;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="dev-server-2-1" target="dev-ifm-1">
+            <mxGeometry relative="1" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="lbl-link-2" value="100G" style="edgeLabel;html=1;fontSize=11;fontColor=#334155;labelBackgroundColor=#ffffff;" vertex="1" parent="link-2">
+          <mxGeometry x="0" relative="1" as="geometry" />
+        </mxCell>
+        <object id="link-3" label="" kind="link" capacity="100G" count="1" source="dev-server-3-1" target="dev-ifm-1">
+          <mxCell style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=24;endArrow=none;html=1;jumpStyle=gap;strokeWidth=2;strokeColor=#111827;exitX=0.24;exitY=0;exitDx=0;exitDy=0;entryX=0.76;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="dev-server-3-1" target="dev-ifm-1">
+            <mxGeometry relative="1" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="lbl-link-3" value="100G" style="edgeLabel;html=1;fontSize=11;fontColor=#334155;labelBackgroundColor=#ffffff;" vertex="1" parent="link-3">
+          <mxGeometry x="0" relative="1" as="geometry" />
+        </mxCell>
+        <object id="link-4" label="" kind="link" capacity="100G" count="3" source="dev-ifm-1" target="dev-scinet-hpc-cluster-cisco-switch-1">
+          <mxCell style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=24;endArrow=none;html=1;jumpStyle=gap;strokeWidth=2;strokeColor=#111827;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="dev-ifm-1" target="dev-scinet-hpc-cluster-cisco-switch-1">
+            <mxGeometry relative="1" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="lbl-link-4" value="3×100G" style="edgeLabel;html=1;fontSize=11;fontColor=#334155;labelBackgroundColor=#ffffff;" vertex="1" parent="link-4">
+          <mxGeometry x="0" relative="1" as="geometry" />
+        </mxCell>
+        <object id="link-5" label="" kind="link" capacity="400G" count="1" source="dev-scinet-hpc-cluster-cisco-switch-1" target="dev-noka-3-1">
+          <mxCell style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=24;endArrow=none;html=1;jumpStyle=gap;strokeWidth=4;strokeColor=#2563eb;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="dev-scinet-hpc-cluster-cisco-switch-1" target="dev-noka-3-1">
+            <mxGeometry relative="1" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="lbl-link-5" value="400G" style="edgeLabel;html=1;fontSize=11;fontColor=#334155;labelBackgroundColor=#ffffff;" vertex="1" parent="link-5">
           <mxGeometry x="0" relative="1" as="geometry" />
         </mxCell>
       </root>
