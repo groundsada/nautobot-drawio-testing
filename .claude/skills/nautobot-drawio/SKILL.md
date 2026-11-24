@@ -1,6 +1,6 @@
 ---
 name: nautobot-drawio
-description: Edit the SC26 drawio topology and push changes to Nautobot. Use when asked to add/remove circuits, hosts, sub-ranges, or locations in this repo, or to sync the diagram to Nautobot.
+description: Edit the SC26 drawio topology and push changes to Nautobot. Use when asked to add, change, move or remove blocks, devices, links, circuits or sub-ranges in this repo, or to sync the diagram to Nautobot.
 ---
 
 # Editing the SC26 topology
@@ -11,7 +11,7 @@ generated from it.
 ## Before any edit
 
 ```bash
-python3 tools/test_pipeline.py     # must be 30/30 before you start
+python3 tools/test_pipeline.py     # must be all green before you start
 ```
 
 If tests fail, fix that first. Do not edit the diagram on a red baseline.
@@ -24,13 +24,25 @@ is what the sync reads.
 | kind | creates | required attrs |
 |---|---|---|
 | `location` | a Nautobot Location | `site` |
-| `circuit` | a Nautobot Circuit | `circuit` |
+| `device` | a Device (+ role, type, platform) | `role`, `location` (block id) |
+| `link` | one Cable + two Interfaces per `count` | `source`, `target` (devices), `capacity` |
+| `circuit` | a Circuit with A/Z terminations | `circuit`, `capacity` |
 | `subrange` | ipam.VLAN rows | `circuits`, `subs` |
-| `host` | (planned) | `hostname`, `circuit` |
+| `note` | nothing (annotation only) | |
 
-**Copy a sibling's `style` attribute verbatim.** Never author a style string —
-the point of this pipeline is that the drawing's visual conventions are
-preserved, and an invented style breaks that.
+**Prefer the edit tool over hand-written XML.** Write a plan and apply it:
+
+```bash
+python3 tools/llm_edit.py --drawio diagrams/sc26.drawio --instruction x \
+  --plan plan.json -o diagrams/sc26.drawio
+```
+
+The ops are listed in `tools/llm_edit_prompt.md`. The tool draws in the file's
+conventions, lays devices out, routes lines around blocks, refuses a plan with
+any bad reference, and proves every untouched shape is byte-identical. If you
+must hand-edit, copy a sibling's `style` verbatim; never invent one. Lint with
+`python3 tools/vendor/drawio_skill/validate.py diagrams/sc26.drawio --score`
+(vendored from Agents365-ai/drawio-skill).
 
 ## After any edit
 

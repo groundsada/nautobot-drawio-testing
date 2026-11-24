@@ -562,6 +562,168 @@ def test_llm_edit_refuses_unknown_kind():
     assert "host" not in kinds, "expected no host kind in this fixture"
 
 
+# --------------------------------------------- generic edits: drawing + Nautobot
+def _blank():
+    d = tempfile.mkdtemp()
+    src = os.path.join(d, "blank.drawio")
+    subprocess.run([sys.executable, str(HERE / "make_blank_diagram.py"), "-o", src],
+                   check=True, capture_output=True)
+    return d, src
+
+
+def _edit(src, out, edits):
+    import json
+    pf = out + ".plan.json"
+    pathlib.Path(pf).write_text(json.dumps({"edits": edits}))
+    return subprocess.run([sys.executable, str(HERE / "llm_edit.py"), "--drawio", src,
+                           "--instruction", "x", "--plan", pf, "-o", out],
+                          capture_output=True, text=True)
+
+
+HPC = [
+    {"op": "add_device", "name": "noka-3", "role": "router", "in": "SCinet NOC"},
+    {"op": "add_device", "name": "hpc-sw-1", "role": "switch", "in": "SCinet HPC Cluster"},
+    {"op": "add_device", "name": "ifm-1", "role": "module", "in": "SCinet HPC Cluster"},
+    {"op": "add_device", "name": "srv-1", "role": "server", "in": "SCinet HPC Cluster"},
+    {"op": "add_link", "from": "noka-3", "to": "hpc-sw-1", "capacity": "400G"},
+    {"op": "add_link", "from": "hpc-sw-1", "to": "ifm-1", "capacity": "100G", "count": 3},
+    {"op": "add_link", "from": "ifm-1", "to": "srv-1", "capacity": "100G"},
+]
+
+
+def test_devices_and_links_reach_extraction():
+    """/apply ignored kind=device and kind=link, so the HPC edit never reached
+    Nautobot. Each bundle member must become its own cable with distinct ports."""
+    d, src = _blank()
+    out = os.path.join(d, "o.drawio")
+    r = _edit(src, out, HPC)
+    assert r.returncode == 0, r.stderr[-400:]
+    ex = sync_nautobot.extract(out)
+    assert sorted(x["name"] for x in ex["devices"]) == ["hpc-sw-1", "ifm-1", "noka-3", "srv-1"]
+    cables = [c for l in ex["links"] for c in l["cables"]]
+    assert len(cables) == 5, cables
+    bundle = [l for l in ex["links"] if len(l["cables"]) == 3][0]
+    assert len({c["a_iface"] for c in bundle["cables"]}) == 3, bundle
+    assert bundle["type"] == "100gbase-x-qsfp28", bundle["type"]
+    # names are decided client-side and must not drift between runs
+    assert sync_nautobot.extract(out)["links"] == ex["links"]
+
+
+def test_update_delete_move_keep_ids_and_cascade():
+    """Rename keeps the id (so Nautobot renames the row instead of adding one);
+    delete takes the device's links with it; everything else stays byte-identical."""
+    d, src = _blank()
+    s1, s2 = os.path.join(d, "s1.drawio"), os.path.join(d, "s2.drawio")
+    assert _edit(src, s1, HPC).returncode == 0
+    before = {x["name"]: x["node_id"] for x in sync_nautobot.extract(s1)["devices"]}
+    r = _edit(s1, s2, [
+        {"op": "update", "target": "hpc-sw-1", "rename": "hpc-n9k-1",
+         "set": {"model": "N9K-C93600CD-GX"}},
+        {"op": "delete", "target": "srv-1"},
+        {"op": "move", "target": "noka-3", "to": "Caltech Booth 5438"},
+        {"op": "update", "target": "link-1", "set": {"capacity": "800G"}},
+    ])
+    assert r.returncode == 0, r.stderr[-400:]
+    ex = sync_nautobot.extract(s2)
+    after = {x["name"]: x for x in ex["devices"]}
+    assert after["hpc-n9k-1"]["node_id"] == before["hpc-sw-1"], "rename changed the id"
+    assert after["hpc-n9k-1"]["attrs"]["model"] == "N9K-C93600CD-GX"
+    assert "srv-1" not in after
+    # check the drawing, not extraction: extraction skips a link whose end is
+    # gone, which hid a delete that left the link drawn and dangling
+    import xml.etree.ElementTree as ET
+    ends = [(o.get("source"), o.get("target")) for o in ET.parse(s2).getroot().iter("object")]
+    assert all(before["srv-1"] not in e for e in ends), "link survived delete"
+    assert after["noka-3"]["location"] == "loc-caltech"
+    assert [l["capacity"] for l in ex["links"] if l["link_id"] == "link-1"] == ["800G"]
+
+
+def test_plan_is_refused_whole():
+    """One bad reference refuses the plan; half a plan must never be written."""
+    d, src = _blank()
+    out = os.path.join(d, "o.drawio")
+    r = _edit(src, out, [HPC[0], {"op": "add_link", "from": "noka-3", "to": "nope",
+                                  "capacity": "100G"}])
+    assert r.returncode == 1 and "no device named 'nope'" in r.stderr, r.stderr[-300:]
+    assert not os.path.exists(out), "a refused plan wrote a file"
+
+
+def test_attrs_cannot_smuggle_reserved_keys_or_markup():
+    d, src = _blank()
+    out = os.path.join(d, "o.drawio")
+    for attrs in ({"source": "loc-hpc"}, {"note": "<img src=x>"}, {"Bad Key": "1"}):
+        r = _edit(src, out, [dict(HPC[0], attrs=attrs)])
+        assert r.returncode == 1, "accepted attrs %r" % attrs
+
+
+def test_cross_block_route_goes_around_blocks():
+    """drawio's router ignores obstacles: a booth-to-NOC device circuit was
+    drawn straight through the Ciena block. The route must avoid other blocks."""
+    import xml.etree.ElementTree as ET
+    d, src = _blank()
+    out = os.path.join(d, "o.drawio")
+    r = _edit(src, out, [HPC[0],
+        {"op": "add_device", "name": "star-cr6", "role": "router", "in": "StarLight Booth 3651"},
+        {"op": "add_circuit", "circuit": "WC60", "capacity": "100G",
+         "from": "star-cr6", "to": "noka-3"}])
+    assert r.returncode == 0, r.stderr[-300:]
+    root = ET.parse(out).getroot()
+    obj = [o for o in root.iter("object") if o.get("circuit") == "WC60"][0]
+    pts = [(float(p.get("x")), float(p.get("y"))) for p in obj.iter("mxPoint")]
+    assert pts, "no waypoints: left to drawio's obstacle-blind router"
+    for o in root.iter("object"):
+        if o.get("kind") == "location" and o.get("id") not in ("loc-starlight", "loc-scinet-noc"):
+            g = o.find("mxCell/mxGeometry")
+            x, y, w, h = (float(g.get(k)) for k in ("x", "y", "width", "height"))
+            for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+                hit = (min(ax, bx) < x + w and max(ax, bx) > x and
+                       min(ay, by) < y + h and max(ay, by) > y)
+                assert not hit, "route crosses %s" % o.get("label")
+
+
+def test_update_to_reconnects_instead_of_storing_a_label():
+    """qwen3 answered 'move WC53 to end on star-cr6' with set {"to": "star-cr6"};
+    that was stored as a plain attribute and reported as success."""
+    d, src = _blank()
+    s1, s2 = os.path.join(d, "s1.drawio"), os.path.join(d, "s2.drawio")
+    assert _edit(src, s1, [
+        {"op": "add_device", "name": "star-cr6", "role": "router", "in": "StarLight Booth 3651"},
+        {"op": "add_circuit", "circuit": "WC53", "capacity": "400G",
+         "from": "SCinet NOC", "to": "StarLight Booth 3651"}]).returncode == 0
+    r = _edit(s1, s2, [{"op": "update", "target": "WC53", "set": {"to": "star-cr6"}}])
+    assert r.returncode == 0, r.stderr[-300:]
+    c = sync_nautobot.extract(s2)["circuits"]["WC53"]
+    assert c["ends"][1]["node_id"] == "dev-star-cr6-1", c["ends"]
+    r = _edit(s1, s2, [{"op": "add_device", "name": "x1", "role": "router",
+                        "in": "SCinet NOC", "attrs": {"to": "star-cr6"}}])
+    assert r.returncode == 1, "'to' accepted as a plain attribute"
+
+def test_vendored_drawio_lint_passes_on_the_repo_diagram():
+    r = subprocess.run([sys.executable, str(HERE / "vendor" / "drawio_skill" / "validate.py"),
+                        str(HERE.parent / "diagrams" / "sc26.drawio")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout[-400:]
+
+
+def test_remote_script_keys_on_drawio_id_and_reads_back():
+    t = sync_nautobot.REMOTE_TEMPLATE
+    assert "by_drawio(Device" in t and "by_drawio(Location" in t, "names used as keys"
+    assert 'OUT["state"]' in t, "no read-back for the PR comment"
+    assert "allow_bulk_prune" in t.split("drawing-owned devices")[0][-600:], \
+        "device prune has no bulk guard"
+
+
+def test_nautobot_view_draws_from_readback_only():
+    import nautobot_view
+    md = nautobot_view.render({"created": 1, "state": {
+        "locations": ["A", "B"],
+        "devices": [{"name": "r1", "role": "Router", "location": "A", "type": "x", "ports": 1},
+                    {"name": "s1", "role": "Switch", "location": "B", "type": "x", "ports": 1}],
+        "cables": [{"label": "link-1/1", "A": "r1:to s1", "B": "s1:to r1"}],
+        "circuits": [{"cid": "WC51", "provider": "p", "ends": {"A": "A", "Z": "B"}}]}})
+    assert "```mermaid" in md and "D_r1 ---|\"1 cable\"| D_s1" in md and 'L_A -.-|"WC51"| L_B' in md, md
+
+
 # --------------------------------------------------------------- runner
 def main():
     tests = [(n, f) for n, f in sorted(globals().items())

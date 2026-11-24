@@ -22,6 +22,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  issues: write
 
 jobs:
   # Runs anywhere. Proves the diagram is well-formed and shows the diff.
@@ -38,7 +39,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           # for issue_comment we need the PR head, not main
-          ref: ${{ github.event.pull_request.head.sha || github.event.issue.pull_request.url }}
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
 
@@ -60,6 +61,8 @@ jobs:
           m = json.load(open("/tmp/model.json"))
           lines = ["### Diagram plan", ""]
           lines.append(f"- locations: {len(m['locations'])}")
+          lines.append(f"- devices: {len(m['devices'])}")
+          lines.append(f"- links: {len(m['links'])} ({sum(len(l['cables']) for l in m['links'])} cables)")
           lines.append(f"- circuits: {len(m['circuits'])}")
           lines.append(f"- hops: {sum(len(c['hops']) for c in m['circuits'].values())}")
           lines.append(f"- sub-ranges: {sum(len(c['subranges']) for c in m['circuits'].values())}")
@@ -100,17 +103,39 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
 
+      - name: check out the PR head for /apply
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr checkout ${{ github.event.issue.number }}
+
       - name: configure kubectl
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
         run: |
+          umask 077
           mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
-          chmod 600 ~/.kube/config
+          printf '%s' "$KUBECONFIG_B64" | base64 -d > ~/.kube/config
 
       - name: tag
         run: python3 tools/tag_drawio.py tag diagrams/sc26.drawio -o /tmp/tagged.drawio
 
       - name: apply
-        run: python3 tools/sync_nautobot.py --drawio /tmp/tagged.drawio --apply
+        run: |
+          python3 tools/sync_nautobot.py --drawio /tmp/tagged.drawio --apply \
+            --result /tmp/result.json
+          python3 tools/nautobot_view.py /tmp/result.json > /tmp/nautobot.md
 
       - name: verify idempotent (second run must create nothing)
         run: python3 tools/sync_nautobot.py --drawio /tmp/tagged.drawio --apply --expect-noop
+
+      - name: show what Nautobot holds
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = '### Applied to Nautobot\n\n' +
+              require('fs').readFileSync('/tmp/nautobot.md', 'utf8').slice(0, 30000);
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner, repo: context.repo.repo, body });

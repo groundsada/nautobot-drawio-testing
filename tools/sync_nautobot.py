@@ -179,9 +179,74 @@ def extract(path):
             why = "appears in text but has no edge on the graph"
         dropped.append("%s (%s)" % (k, why))
 
+    devices, links = extract_inventory(path)
+    kinds = {l["node_id"]: "location" for l in locations}
+    kinds.update({d["node_id"]: "device" for d in devices})
+    for c in keep.values():
+        # a single-hop circuit between drawn blocks/devices is modelled as a
+        # Nautobot circuit with A/Z terminations; anything else (the poster's
+        # multi-hop circuits between unlabelled nodes) keeps the hop cables
+        if len(c["hops"]) == 1 and all(n in kinds for n in c["hops"][0]):
+            c["ends"] = [{"node_id": n, "kind": kinds[n]} for n in c["hops"][0]]
+
     return {"circuits": keep, "hosts": hosts, "locations": locations,
+            "devices": devices, "links": links,
             "dropped_ids": dropped,
             "untagged_edges": model["untagged_edges"]}
+
+
+IFACE_TYPE = {"10G": "10gbase-x-sfpp", "25G": "25gbase-x-sfp28",
+              "100G": "100gbase-x-qsfp28", "400G": "400gbase-x-qsfpdd",
+              "800G": "800gbase-x-osfp", "1.6T": "1600gbase-x-osfp"}
+# attributes that become Device fields; everything else lands in comments
+DEVICE_FIELDS = {"model", "manufacturer", "platform", "serial", "asset_tag", "status"}
+OWNED = {"id", "label", "kind", "role", "location", "source", "target", "capacity",
+         "count", "a_ports", "b_ports", "near"}
+
+
+def extract_inventory(path):
+    """kind=device and kind=link objects -> devices and the cables they imply.
+
+    Interface names are decided HERE, deterministically, so a re-run produces
+    the same names and the sync converges instead of adding ports: an explicit
+    a_ports/b_ports list wins, otherwise 'to <peer>' (+ ' #n' in a bundle).
+    """
+    import xml.etree.ElementTree as ET
+    objs = list(ET.parse(path).getroot().iter("object"))
+    devices = [{"node_id": o.get("id"), "name": (o.get("label") or "").strip(),
+                "role": o.get("role") or "device", "location": o.get("location"),
+                "attrs": {k: v for k, v in sorted(o.attrib.items()) if k not in OWNED}}
+               for o in objs if o.get("kind") == "device"]
+    names = {d["node_id"]: d["name"] for d in devices}
+    used = {}
+    links = []
+    for o in objs:
+        if o.get("kind") != "link":
+            continue
+        a, b = o.get("source"), o.get("target")
+        if a not in names or b not in names:
+            continue
+        n = int(o.get("count") or 1)
+        cap = o.get("capacity")
+        given = {e: [x.strip() for x in (o.get(k) or "").split(",") if x.strip()]
+                 for e, k in (("a", "a_ports"), ("b", "b_ports"))}
+        cables = []
+        for i in range(n):
+            ends = []
+            for e, dev, peer in (("a", a, b), ("b", b, a)):
+                if len(given[e]) == n:
+                    name = given[e][i]
+                else:
+                    name = ("to %s" % names[peer])[:56] + (" #%d" % (i + 1) if n > 1 else "")
+                if name in used.setdefault(dev, set()):
+                    name = "%s (%s)" % (name[:48], o.get("id"))
+                used[dev].add(name)
+                ends.append(name)
+            cables.append({"label": "%s/%d" % (o.get("id"), i + 1),
+                           "a_iface": ends[0], "b_iface": ends[1]})
+        links.append({"link_id": o.get("id"), "a": a, "b": b, "capacity": cap,
+                      "type": IFACE_TYPE.get(cap, "other"), "cables": cables})
+    return devices, links
 
 
 # ------------------------------------------------------------------- remote
@@ -216,21 +281,164 @@ def provider(name):
         prov_cache[name] = p
     return prov_cache[name]
 
+# ---- drawio_id: the natural key of every object the drawing owns
+# Names are not keys: renaming a block or a device in the drawing must rename
+# the Nautobot row, not create a second one and orphan the first.
+from django.contrib.contenttypes.models import ContentType
+from nautobot.extras.models import CustomField
+from nautobot.dcim.models import LocationType, Manufacturer, Platform
+from nautobot.dcim.models.cables import CableToCableTermination
+from nautobot.circuits.models import CircuitTermination
+if not DRY:
+    cf, _ = CustomField.objects.get_or_create(
+        key="drawio_id", defaults={"label": "drawio id", "type": "text",
+                                   "description": "id of the shape in diagrams/sc26.drawio"})
+    for m in (Location, Device):
+        cf.content_types.add(ContentType.objects.get_for_model(m))
+
+def by_drawio(model, node_id):
+    return model.objects.filter(_custom_field_data__drawio_id=node_id).first()
+
+def save(obj, created, fields):
+    # set fields, save only if something differs; count what happened
+    changed = created or any(getattr(obj, k) != v for k, v in fields.items())
+    if DRY:
+        note("created" if created else ("updated" if changed else "unchanged"))
+        return
+    for k, v in fields.items():
+        setattr(obj, k, v)
+    if changed:
+        obj.validated_save()
+    note("created" if created else ("updated" if changed else "unchanged"))
+
 # ---- locations (from kind=location blocks in the drawing)
-from nautobot.dcim.models import LocationType
 site_t, _ = LocationType.objects.get_or_create(name="Site",
                                                defaults={"nestable": True})
-want_locs = []
-for loc in PAYLOAD.get("locations") or []:
-    want_locs.append(loc["name"])
+if not DRY:
+    # a location type lists what may live there; without CircuitTermination
+    # every circuit end was refused ("may not associate to locations of type")
+    for m in (Device, CircuitTermination):
+        site_t.content_types.add(ContentType.objects.get_for_model(m))
+locmap = {}
+for L in PAYLOAD.get("locations") or []:
+    obj = by_drawio(Location, L["node_id"]) or Location.objects.filter(name=L["name"]).first()
+    created = obj is None
+    if created:
+        obj = Location(location_type=site_t, status=st)
+    cfd = dict(obj._custom_field_data or {}, drawio_id=L["node_id"])
+    save(obj, created, {"name": L["name"], "_custom_field_data": cfd})
+    locmap[L["node_id"]] = obj
+OUT["locations"] = len(locmap)
+
+# ---- devices (kind=device)
+role_cache, dt_cache = {}, {}
+def role_for(name):
+    name = name[:1].upper() + name[1:]
+    if name not in role_cache:
+        r, _ = Role.objects.get_or_create(name=name)
+        if not DRY:
+            r.content_types.add(ContentType.objects.get_for_model(Device))
+        role_cache[name] = r
+    return role_cache[name]
+
+def dtype_for(mfr_name, model):
+    key = (mfr_name, model)
+    if key not in dt_cache:
+        mfr, _ = Manufacturer.objects.get_or_create(name=mfr_name)
+        dt_cache[key], _ = DeviceType.objects.get_or_create(manufacturer=mfr, model=model)
+    return dt_cache[key]
+
+devmap = {}
+for d in PAYLOAD.get("devices") or []:
+    try:
+        L = locmap.get(d["location"])
+        if L is None:
+            raise ValueError("block %s is not in the drawing" % d["location"])
+        a = d.get("attrs") or {}
+        role = role_for(d["role"])
+        status = Status.objects.get(name=a.get("status", "Active"))
+        fields = {
+            "name": d["name"], "role": role, "location": L, "status": status,
+            "device_type": dtype_for(a.get("manufacturer") or "Generic",
+                                     a.get("model") or "Generic %s" % role.name),
+            "platform": (Platform.objects.get_or_create(name=a["platform"])[0]
+                         if a.get("platform") else None),
+            "serial": a.get("serial", ""),
+            "asset_tag": a.get("asset_tag") or None,
+            # attributes Nautobot has no field for stay visible, not dropped
+            "comments": "\\n".join("%s: %s" % kv for kv in sorted(a.items())
+                                  if kv[0] not in PAYLOAD["device_fields"]),
+        }
+        obj = by_drawio(Device, d["node_id"])
+        created = obj is None
+        if created:
+            obj = Device()
+        fields["_custom_field_data"] = dict(obj._custom_field_data or {}, drawio_id=d["node_id"])
+        save(obj, created, fields)
+        devmap[d["node_id"]] = obj
+    except Exception as e:
+        OUT["errors"].append("device %s: %s" % (d["name"], str(e)[:160]))
+
+# ---- interfaces + cables (kind=link)
+cable_st = Status.objects.get(name="Connected")
+def iface(dev, name, itype):
+    i = Interface.objects.filter(device=dev, name=name).first()
+    if i is None:
+        if DRY:
+            note("created")
+            return None
+        i = Interface(device=dev, name=name)
+        save(i, True, {"type": itype, "status": st,
+                       "description": "managed-by=drawio-pipeline"})
+    elif i.type != itype:
+        save(i, False, {"type": itype})
+    return i
+
+def ends(cab):
+    return {t.cable_end: (t.interface_id or t.circuit_termination_id)
+            for t in CableToCableTermination.objects.filter(cable=cab)}
+
+def cable(label, a, b):
+    # one cable, re-terminated only if its ends moved
+    cab = Cable.objects.filter(label=label).first()
     if DRY:
-        note("updated" if Location.objects.filter(name=loc["name"]).exists()
-             else "created")
+        note("updated" if cab else "created")
+        return
+    if cab and ends(cab) == {"A": a.pk, "B": b.pk}:
+        note("unchanged")
+        return
+    if cab:
+        cab.delete()
+    for t in (a, b):
+        # a port can hold one cable: free it from any cable we used to own
+        old = getattr(t, "cable", None)
+        if old is not None:
+            old.delete()
+            t.refresh_from_db()
+    cab = Cable(label=label, status=cable_st)
+    cab.validated_save()
+    cab.add_termination(a, "A")
+    cab.add_termination(b, "B")
+    cab.save()
+    note("created")
+
+want_cables, want_ifaces = set(), set()
+for l in PAYLOAD.get("links") or []:
+    da, db = devmap.get(l["a"]), devmap.get(l["b"])
+    if da is None or db is None:
+        OUT["errors"].append("link %s: an end device was not synced" % l["link_id"])
         continue
-    Location.objects.update_or_create(
-        name=loc["name"],
-        defaults={"location_type": site_t, "status": st})
-OUT["locations"] = len(want_locs)
+    for c in l["cables"]:
+        want_cables.add(c["label"])
+        want_ifaces.update({(da.pk, c["a_iface"]), (db.pk, c["b_iface"])})
+        try:
+            ia, ib = iface(da, c["a_iface"], l["type"]), iface(db, c["b_iface"], l["type"])
+            if ia is not None and ib is not None:
+                cable(c["label"], ia, ib)
+            elif DRY:
+                note("created")
+        except Exception as e:
+            OUT["errors"].append("cable %s: %s" % (c["label"], str(e)[:160]))
 
 # ---- circuits
 for c in PAYLOAD["circuits"]:
@@ -272,6 +480,31 @@ for c in PAYLOAD["circuits"]:
     except Exception as e:
         OUT["errors"].append("%s: %s" % (c["cid"], str(e)[:120]))
         note("skipped")
+
+# ---- circuit terminations (single-hop circuits between drawn blocks/devices)
+for c in PAYLOAD["circuits"]:
+    if not c.get("ends") or DRY:
+        continue
+    try:
+        circ = Circuit.objects.get(cid=c["cid"])
+        for side, end in zip("AZ", c["ends"]):
+            dev = devmap.get(end["node_id"])
+            L = dev.location if dev else locmap.get(end["node_id"])
+            t = CircuitTermination.objects.filter(circuit=circ, term_side=side).first()
+            created = t is None
+            if created:
+                t = CircuitTermination(circuit=circ, term_side=side)
+            save(t, created, {"location": L})
+            if dev is not None:
+                # a circuit that ends on a device is cabled to a port on it
+                want_cables.add("%s term%s" % (c["cid"], side))
+                want_ifaces.add((dev.pk, c["cid"].lower()))
+                i = iface(dev, c["cid"].lower(), PAYLOAD["iface_type"].get(c.get("capacity"), "other"))
+                cable("%s term%s" % (c["cid"], side), i, t)
+            elif t.cable_id if hasattr(t, "cable_id") else getattr(t, "cable", None):
+                t.cable.delete()
+    except Exception as e:
+        OUT["errors"].append("%s terminations: %s" % (c["cid"], str(e)[:160]))
 
 # ---- VLANs as first-class objects
 from nautobot.ipam.models import VLAN, VLANGroup
@@ -347,15 +580,15 @@ OUT["vlans_pruned"] = pruned_vlans
 pruned_circuits = pruned_cables = 0
 if not DRY:
     want_cids = {c["cid"] for c in PAYLOAD["circuits"]}
-    want_cables = {"%s hop%d" % (c["cid"], i)
-                   for c in PAYLOAD["circuits"]
-                   for i in range(len(c.get("hops") or []))}
+    want_hops = {"%s hop%d" % (c["cid"], i)
+                 for c in PAYLOAD["circuits"] if not c.get("ends")
+                 for i in range(len(c.get("hops") or []))}
     # cable labels are already a precise ownership signal ('WCnn hopN' is a
     # pattern this pipeline defines and nothing else produces), so no extra
     # marker is needed here
     stale_cables = [cab for cab in Cable.objects.filter(label__contains=" hop")
                     if re.fullmatch(r"WC[0-9]{2} hop[0-9]+", cab.label or "")
-                    and cab.label not in want_cables]
+                    and cab.label not in want_hops]
     for cab in stale_cables:
         cab.delete()
         pruned_cables += 1
@@ -410,7 +643,8 @@ from nautobot.dcim.models.cables import CableToCableTermination
 # symptom of the global-index bug, which left WCnn hop1..hopN lying around
 import re as _re
 valid = {"%s hop%d" % (c["cid"], i)
-         for c in PAYLOAD["circuits"] for i in range(len(c.get("hops") or []))}
+         for c in PAYLOAD["circuits"] if not c.get("ends")
+         for i in range(len(c.get("hops") or []))}
 stale = [cab for cab in Cable.objects.filter(label__contains=" hop")
          if cab.label not in valid and _re.fullmatch(r"WC[0-9]{2} hop[0-9]+", cab.label or "")]
 for cab in stale:
@@ -418,6 +652,8 @@ for cab in stale:
 if stale:
     OUT["purged"] = len(stale)
 for c in PAYLOAD["circuits"]:
+    if c.get("ends"):
+        continue
     # per-circuit index: a global enumerate() made labels advance every run
     # (WC01 hop1, then hop2...) so re-runs created new cables instead of
     # converging on the same one.
@@ -455,6 +691,58 @@ for c in PAYLOAD["circuits"]:
             OUT["errors"].append("%s: %s" % (label, str(e)[:120]))
             note("skipped")
 
+# ---- prune what the drawing no longer has: link cables, ports, devices
+# Scoped to rows this pipeline owns: cables labelled 'link-N/i' or 'WCnn termX',
+# interfaces it created, and devices carrying a drawio_id.
+pruned = {"devices": 0, "cables": 0, "interfaces": 0}
+if not DRY and not OUT["errors"]:
+    for cab in Cable.objects.filter(label__regex=r"^(link-[0-9]+/[0-9]+|WC[0-9]+ term[AZ])$"):
+        if cab.label not in want_cables:
+            cab.delete()
+            pruned["cables"] += 1
+    owned = Device.objects.filter(_custom_field_data__has_key="drawio_id")
+    stale = [d for d in owned if d._custom_field_data.get("drawio_id") not in devmap]
+    if len(stale) > max(3, owned.count() * 0.1) and not PAYLOAD.get("allow_bulk_prune"):
+        OUT["errors"].append("refusing to delete %d of %d drawing-owned devices; pass "
+                             "--allow-bulk-prune if this is intended" % (len(stale), owned.count()))
+    else:
+        for d in stale:
+            d.delete()
+            pruned["devices"] += 1
+    for i in Interface.objects.filter(description="managed-by=drawio-pipeline"):
+        if (i.device_id, i.name) not in want_ifaces:
+            i.delete()
+            pruned["interfaces"] += 1
+OUT["pruned"] = pruned
+
+# ---- read back what Nautobot now holds, for the PR comment
+def end_name(t):
+    if t.interface_id:
+        return "%s:%s" % (t.interface.device.name, t.interface.name)
+    if t.circuit_termination_id:
+        ct = t.circuit_termination
+        return "%s/%s" % (ct.circuit.cid, ct.term_side)
+    return "?"
+OUT["state"] = {
+    "locations": sorted(Location.objects.values_list("name", flat=True)),
+    "devices": [{"name": d.name, "role": d.role.name, "location": d.location.name,
+                 "type": "%s %s" % (d.device_type.manufacturer.name, d.device_type.model),
+                 "ports": d.interfaces.count()}
+                for d in Device.objects.filter(_custom_field_data__has_key="drawio_id")
+                .select_related("role", "location", "device_type__manufacturer").order_by("name")],
+    "cables": sorted([{"label": c.label, **{t.cable_end: end_name(t) for t in
+                       CableToCableTermination.objects.filter(cable=c)
+                       .select_related("interface__device", "circuit_termination__circuit")}}
+                      for c in Cable.objects.filter(
+                          label__regex=r"^(link-[0-9]+/[0-9]+|WC[0-9]+ term[AZ])$")],
+                     key=lambda x: x["label"]),
+    "circuits": [{"cid": c.cid, "provider": c.provider.name,
+                  "ends": {t.term_side: t.location.name if t.location else None
+                           for t in c.circuit_terminations.all()}}
+                 for c in Circuit.objects.filter(
+                     description__contains="managed-by=drawio-pipeline").order_by("cid")],
+}
+
 print("RESULT=" + json.dumps(OUT))
 """
 
@@ -472,7 +760,7 @@ def nautobot_pod():
     return None
 
 
-def apply_remote(payload, expect_noop=False):
+def apply_remote(payload, expect_noop=False, result_path=None):
     pod = nautobot_pod()
     if not pod:
         print("no Ready nautobot-server pod in ns mfsada", file=sys.stderr)
@@ -501,7 +789,10 @@ def apply_remote(payload, expect_noop=False):
               % (r.stdout[-2000:], r.stderr[-2000:]), file=sys.stderr)
         return 1
     result = json.loads(m.group(1))
-    print(json.dumps(result, indent=2))
+    if result_path:
+        pathlib.Path(result_path).write_text(json.dumps(result, indent=2))
+    # the read-back is for --result and the PR comment, not the log
+    print(json.dumps({k: v for k, v in result.items() if k != "state"}, indent=2))
     if result["errors"]:
         return 1
     if expect_noop and result.get("created"):
@@ -524,6 +815,8 @@ def main(argv=None):
     ap.add_argument("--skip-cluster", action="store_true",
                     help="extract and report only; do not contact Kubernetes")
     ap.add_argument("--json", help="write extracted model here")
+    ap.add_argument("--result", help="write the apply result, including what "
+                                     "Nautobot holds afterwards, here")
     a = ap.parse_args(argv)
 
     if not (a.dry_run or a.apply):
@@ -537,8 +830,9 @@ def main(argv=None):
     hops = sum(len(c["hops"]) for c in extracted["circuits"].values())
     with_cap = sum(1 for c in extracted["circuits"].values() if c["capacity"])
     with_prov = sum(1 for c in extracted["circuits"].values() if c["provider"])
-    print("extracted %d circuits, %d hops, %d hosts, %d locations"
-          % (n, hops, len(extracted["hosts"]), len(extracted["locations"])))
+    print("extracted %d circuits, %d hops, %d locations, %d devices, %d links (%d cables)"
+          % (n, hops, len(extracted["locations"]), len(extracted["devices"]),
+             len(extracted["links"]), sum(len(l["cables"]) for l in extracted["links"])))
     print("  capacity known: %d/%d | provider known: %d/%d | untagged edges: %d"
           % (with_cap, n, with_prov, n, extracted["untagged_edges"]))
     loops = {k: v["_src"]["self_loops"] for k, v in extracted["circuits"].items()
@@ -557,10 +851,14 @@ def main(argv=None):
         "circuits": list(extracted["circuits"].values()),
         "hosts": extracted["hosts"],
         "locations": extracted["locations"],
+        "devices": extracted["devices"],
+        "links": extracted["links"],
+        "device_fields": sorted(DEVICE_FIELDS),
+        "iface_type": IFACE_TYPE,
         "dry_run": bool(a.dry_run),
         "allow_bulk_prune": bool(a.allow_bulk_prune),
     }
-    return apply_remote(payload, expect_noop=a.expect_noop)
+    return apply_remote(payload, expect_noop=a.expect_noop, result_path=a.result)
 
 
 if __name__ == "__main__":
