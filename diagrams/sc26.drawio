@@ -136,12 +136,12 @@
             <mxGeometry x="300" y="954" width="104" height="40" as="geometry" />
           </mxCell>
         </object>
-        <object id="dev-ifm-1" label="IFM" kind="device" role="module" location="loc-hpc">
+        <object id="dev-ifm-1" label="ifm-1" kind="device" role="module" location="loc-hpc">
           <mxCell style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fontFamily=Helvetica;fillColor=#7e22ce;strokeColor=#581c87;fontColor=#ffffff;fontSize=12;fontStyle=1;" vertex="1" parent="1">
             <mxGeometry x="246" y="868" width="104" height="40" as="geometry" />
           </mxCell>
         </object>
-        <object id="dev-scinet-hpc-cluster-cisco-switch-1" label="SCinet HPC Cluster Cisco switch" kind="device" role="switch" location="loc-hpc">
+        <object id="dev-scinet-hpc-cluster-cisco-switch-1" label="hpc-sw-1" kind="device" role="switch" location="loc-hpc" manufacturer="Cisco" model="N9K-C93600CD-GX">
           <mxCell style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fontFamily=Helvetica;fillColor=#0f766e;strokeColor=#134e4a;fontColor=#ffffff;fontSize=12;fontStyle=1;" vertex="1" parent="1">
             <mxGeometry x="246" y="782" width="104" height="40" as="geometry" />
           </mxCell>
