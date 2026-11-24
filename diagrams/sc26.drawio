@@ -54,6 +54,10 @@
         <mxCell id="lbl-wc52-1" value="WC52  1.2T" style="edgeLabel;html=1;fontSize=13;fontStyle=1;labelBackgroundColor=#ffffff;" vertex="1" parent="circ-wc52-1">
           <mxGeometry x="0.5" relative="1" as="geometry" />
         </mxCell>
+        <object id="circ-wc53-1" circuit="WC53" kind="circuit" circuits="WC53" capacity_inferred="400G" source="loc-scinet-noc" target="loc-starlight"><mxCell style="endArrow=none;html=1;rounded=0;strokeWidth=40;strokeColor=#3399FF;" edge="1" parent="1" source="loc-scinet-noc" target="loc-starlight"><mxGeometry relative="1" as="geometry" />
+        </mxCell></object><mxCell id="lbl-wc53-1" value="WC53  400G" style="edgeLabel;html=1;fontSize=13;fontStyle=1;labelBackgroundColor=#ffffff;" vertex="1" parent="circ-wc53-1">
+          <mxGeometry x="0.5" relative="1" as="geometry" />
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>
