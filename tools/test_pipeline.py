@@ -364,8 +364,9 @@ def test_llm_edit_uses_the_files_capacity_convention():
     widths = [llm_edit.CAPACITY_STYLE[c][0] for c in order]
     assert widths == sorted(widths) and len(set(widths)) == len(widths), widths
     assert "2400G" not in llm_edit.CAPACITY_STYLE
-    src = str(HERE.parent / "diagrams" / "sc26.drawio")
-    d = tempfile.mkdtemp()
+    # the blank base, not diagrams/sc26.drawio: on a PR branch that already
+    # has WC51 this test refused its own fixture and failed every /draw
+    d, src = _blank()
     out, pf = os.path.join(d, "o.drawio"), os.path.join(d, "p.json")
     pathlib.Path(pf).write_text(json.dumps({"edits": [
         {"op": "add_edge", "circuit": "WC51", "capacity": "100G",
