@@ -20,6 +20,11 @@ permissions:
   contents: write
   pull-requests: write
 
+# shared with screenshots.yml so the two never push to the same PR branch at once
+concurrency:
+  group: diagram-pr-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
 jobs:
   edit:
     # only a PR comment starting with /draw, by someone with write access
@@ -130,6 +135,9 @@ jobs:
             exit 0
           fi
           git commit -m "agent: $(printf '%s' "$COMMENT" | head -1 | cut -c1-72)"
+          # rebase in case anything landed meanwhile; on a conflicting render
+          # keep this run's (in a rebase, "theirs" is the commit being replayed)
+          git pull --rebase -X theirs origin "$(git branch --show-current)"
           git push
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
