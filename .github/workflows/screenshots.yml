@@ -43,11 +43,17 @@ jobs:
           python3 - "$f" <<'PY'
           import sys, re
           s = open(sys.argv[1]).read()
-          # a real render contains shapes; an error page does not
-          n = len(re.findall(r'<path|<rect|<text', s))
-          print(f"  {len(s)} bytes, {n} drawable elements")
-          assert n > 5, f"render looks empty ({n} elements)"
-          assert "SCinet NOC" in s or "StarLight" in s, "labels missing"
+          rects = len(re.findall(r'<rect', s))
+          paths = len(re.findall(r'<path', s))
+          print(f"  {len(s)} bytes, {rects} rects, {paths} paths")
+          # Assert on SHAPES, not just any element: a blank render still contains
+          # a viewBox and text, so counting <text> alone passed an empty image
+          # during testing. Five blocks must produce at least five rects.
+          assert rects >= 5, f"only {rects} rects -- render looks blank"
+          assert paths >= 2, f"only {paths} paths -- edges missing"
+          for label in ("SCinet NOC", "StarLight", "Caltech", "Ciena", "HPC"):
+              assert label in s, f"label missing from render: {label}"
+          print("  render verified: shapes and labels present")
           PY
 
       - name: commit the render to the PR branch
