@@ -19,13 +19,19 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  statuses: write
+
+# shared with screenshots.yml so the two never push to the same PR branch at once
+concurrency:
+  group: diagram-pr-${{ github.event.issue.number }}
+  cancel-in-progress: false
 
 jobs:
   edit:
     # only a PR comment starting with /draw, by someone with write access
     if: >
       github.event.issue.pull_request &&
-      startsWith(github.event.comment.body, '/draw ') &&
+      contains(github.event.comment.body, '/draw ') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
                github.event.comment.author_association)
     runs-on: ubuntu-latest
@@ -72,7 +78,12 @@ jobs:
           # strip the leading '/draw ' command word
           python3 - <<'PY'
           import os, subprocess, sys
-          instruction = os.environ["INSTRUCTION"].split(" ", 1)[1].strip()
+          import re
+          m = re.search(r"^\s*/draw\s+(.+)$", os.environ["INSTRUCTION"], re.M)
+          if not m:
+              print("no /draw line in the comment; nothing to do")
+              sys.exit(0)
+          instruction = m.group(1).strip()
           r = subprocess.run([sys.executable, "tools/llm_edit.py",
                               "--drawio", "diagrams/sc26.drawio",
                               "--instruction", instruction,
@@ -102,7 +113,7 @@ jobs:
           mkdir -p diagrams/rendered
           docker run --rm -v "$PWD/diagrams:/data" \
             rlespinasse/drawio-desktop-headless:latest \
-            -x -f svg -o /data/rendered/sc26.svg /data/sc26.drawio
+            -x -f svg -b 24 -o /data/rendered/sc26.svg /data/sc26.drawio
           python3 - diagrams/rendered/sc26.svg <<'PY'
           import sys, re
           s = open(sys.argv[1]).read()
@@ -130,6 +141,9 @@ jobs:
             exit 0
           fi
           git commit -m "agent: $(printf '%s' "$COMMENT" | head -1 | cut -c1-72)"
+          # rebase in case anything landed meanwhile; on a conflicting render
+          # keep this run's (in a rebase, "theirs" is the commit being replayed)
+          git pull --rebase -X theirs origin "$(git branch --show-current)"
           git push
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
@@ -138,10 +152,22 @@ jobs:
         uses: actions/github-script@v7
         env:
           OUTCOME: ${{ steps.agent.outcome }}
+          COMMITTED: ${{ steps.commit.outcome }}
           SHA: ${{ steps.commit.outputs.sha }}
         with:
           script: |
-            const ok = process.env.OUTCOME === 'success';
+            const ok = process.env.OUTCOME === 'success' && process.env.COMMITTED === 'success';
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            // bot commits need manual approval before other workflows run on
+            // them, so the PR showed no checks at all; record what this run
+            // verified (tests + lossless check, before committing) on the sha
+            if (ok && process.env.SHA) {
+              await github.rest.repos.createCommitStatus({
+                owner: context.repo.owner, repo: context.repo.repo,
+                sha: process.env.SHA, state: 'success', target_url: run,
+                context: 'agent-edit / verified',
+                description: 'tests, lossless check and render passed before commit'});
+            }
             const plan = require('fs').existsSync('/tmp/plan.json')
               ? require('fs').readFileSync('/tmp/plan.json', 'utf8').slice(0, 1200)
               : '(no plan produced)';

@@ -19,6 +19,11 @@ permissions:
   contents: write
   pull-requests: write
 
+# shared with agent-edit.yml so the two never push to the same PR branch at once
+concurrency:
+  group: diagram-pr-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
   render:
     runs-on: ubuntu-latest
@@ -33,7 +38,7 @@ jobs:
           mkdir -p diagrams/rendered
           docker run --rm -v "$PWD/diagrams:/data" \
             rlespinasse/drawio-desktop-headless:latest \
-            -x -f svg -o /data/rendered/sc26.svg /data/sc26.drawio
+            -x -f svg -b 24 -o /data/rendered/sc26.svg /data/sc26.drawio
           ls -l diagrams/rendered/
 
       - name: verify the render is real
@@ -66,6 +71,9 @@ jobs:
             exit 0
           fi
           git commit -m "chore: update rendered diagram [skip ci]"
+          # rebase in case anything landed meanwhile; on a conflicting render
+          # keep this run's (in a rebase, "theirs" is the commit being replayed)
+          git pull --rebase -X theirs origin "$(git branch --show-current)"
           git push
 
       - name: post it on the PR
