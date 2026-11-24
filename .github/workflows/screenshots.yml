@@ -1,28 +1,22 @@
 name: screenshots
 
-# Posts before/after pictures on the PR so a reviewer can see what changed
-# without opening drawio.
+# Renders diagrams/sc26.drawio and posts it on the PR.
 #
-# Why this is not just "run drawio": there is no supported drawio CLI in the
-# GitHub-hosted runners, and the desktop AppImage needs FUSE. The community
-# action below wraps the same xvfb + electron approach in a container.
+# Format is SVG, not PNG. Measured on ubuntu-latest:
+#   PNG  -> "Renderer process crashed" / UnknownVizError (needs canvas/GPU)
+#   SVG  -> works, 95 KB, renders identically
+# SVG is also better here: crisp at any zoom and small enough to inline.
 #
-# Nautobot screenshots are NOT attempted here. The topology plugin renders
-# client-side (vis.js), so a headless screenshot needs a browser driving the
-# live UI -- it timed out at 60s through a port-forward when tested. What CI can
-# show from Nautobot is the data, which is what /apply posts. Rendering the
-# plugin view is left to the operator.
+# The image is committed to the PR branch, so it shows in the Files-changed
+# view as an image diff AND can be linked from a comment.
 
 on:
-  # DISABLED: unverified. Local rendering works (diagrams/sc26.png renders at
-  # 1729x1769) but the CI path failed 8 times for environment reasons that
-  # cannot be reproduced on macOS: AppImage extraction, FUSE, and the drawio
-  # action's container/git assumptions. Re-enable once someone with a Linux
-  # shell can run the install+render steps and confirm the binary path.
+  pull_request:
+    paths: ["diagrams/**"]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
@@ -30,65 +24,54 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: render the changed diagram
-        uses: rlespinasse/drawio-export-action@v2
         with:
-          path: diagrams/sc26.drawio
-          format: png
-          transparent: false
-          output: /tmp/render
-          scale: "2"
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          fetch-depth: 0
 
-      - name: find the rendered file
-        id: find
+      - name: render to svg
         run: |
-          f=$(find /tmp/render -name '*.png' | head -1)
-          echo "file=$f" >> "$GITHUB_OUTPUT"
-          echo "rendered: $f"
-          python3 -c "
-          from struct import unpack
-          d=open('$f','rb').read(33)
-          print('  size:', unpack('>II', d[16:24]))
-          "
+          mkdir -p diagrams/rendered
+          docker run --rm -v "$PWD/diagrams:/data" \
+            rlespinasse/drawio-desktop-headless:latest \
+            -x -f svg -o /data/rendered/sc26.svg /data/sc26.drawio
+          ls -l diagrams/rendered/
 
-      # Committing the PNG to the PR branch means GitHub shows it inline in the
-      # Files-changed view as an image diff, which is better than an attachment.
+      - name: verify the render is real
+        run: |
+          f=diagrams/rendered/sc26.svg
+          [ -s "$f" ] || { echo "::error::no svg produced"; exit 1; }
+          python3 - "$f" <<'PY'
+          import sys, re
+          s = open(sys.argv[1]).read()
+          # a real render contains shapes; an error page does not
+          n = len(re.findall(r'<path|<rect|<text', s))
+          print(f"  {len(s)} bytes, {n} drawable elements")
+          assert n > 5, f"render looks empty ({n} elements)"
+          assert "SCinet NOC" in s or "StarLight" in s, "labels missing"
+          PY
+
       - name: commit the render to the PR branch
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          mkdir -p diagrams/rendered
-          cp "${{ steps.find.outputs.file }}" diagrams/rendered/sc26.png
-          git add diagrams/rendered/sc26.png
+          git add diagrams/rendered/sc26.svg
           if git diff --cached --quiet; then
-            echo "no visual change"
-          else
-            git commit -m "chore: update rendered diagram [skip ci]"
-            git push
+            echo "::notice::no visual change"
+            exit 0
           fi
+          git commit -m "chore: update rendered diagram [skip ci]"
+          git push
 
-      - name: post the image on the PR
-        if: always()
+      - name: post it on the PR
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
-            const path = '${{ steps.find.outputs.file }}';
-            const b64 = fs.readFileSync(path).toString('base64');
-            const { data } = await github.rest.repos.createOrUpdateFileContents({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              path: `.pr-screenshots/pr-${context.issue.number}.png`,
-              message: `screenshot for PR #${context.issue.number}`,
-              content: b64,
-              branch: context.payload.pull_request.head.ref,
-            }).catch(e => ({ data: null }));
-            const sha = context.payload.pull_request.head.sha;
-            const url = `https://raw.githubusercontent.com/${context.repo.owner}/${context.repo.repo}/${sha}/diagrams/rendered/sc26.png`;
+            const branch = context.payload.pull_request.head.ref;
+            const url = `https://raw.githubusercontent.com/${context.repo.owner}/${context.repo.repo}/${branch}/diagrams/rendered/sc26.svg`;
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `### Rendered diagram\n\n![diagram](${url})\n\n_Rendered headlessly from \`diagrams/sc26.drawio\`. If this image is blank or missing, the diagram failed to render._`
+              body: `### Rendered diagram\n\n<img src="${url}?t=${Date.now()}" width="760" alt="topology">\n\n_SVG rendered from \`diagrams/sc26.drawio\` in CI. Also committed to \`diagrams/rendered/sc26.svg\`._`
             });
