@@ -38,8 +38,16 @@
         <mxCell id="lbl-wc99-1" value="WC99  400G" style="edgeLabel;html=1;fontSize=13;fontStyle=1;labelBackgroundColor=#ffffff;" vertex="1" parent="circ-wc99-1">
           <mxGeometry x="0.5" relative="1" as="geometry" />
         </mxCell>
-        <object id="circ-wc51-1" circuit="WC51" kind="circuit" circuits="WC51" capacity_inferred="100G" source="loc-starlight" target="loc-ciena"><mxCell style="endArrow=none;html=1;rounded=0;strokeWidth=25;strokeColor=#111111;" edge="1" parent="1" source="loc-starlight" target="loc-ciena"><mxGeometry relative="1" as="geometry" />
-        </mxCell></object><mxCell id="lbl-wc51-1" value="WC51  100G" style="edgeLabel;html=1;fontSize=13;fontStyle=1;labelBackgroundColor=#ffffff;" vertex="1" parent="circ-wc51-1">
+        <object id="circ-wc51-1" circuit="WC51" kind="circuit" circuits="WC51" capacity_inferred="100G" source="loc-starlight" target="loc-ciena">
+          <mxCell style="endArrow=none;html=1;rounded=0;strokeWidth=25;strokeColor=#111111;" edge="1" parent="1" source="loc-starlight" target="loc-ciena">
+            <mxGeometry relative="1" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="lbl-wc51-1" value="WC51  100G" style="edgeLabel;html=1;fontSize=13;fontStyle=1;labelBackgroundColor=#ffffff;" vertex="1" parent="circ-wc51-1">
+          <mxGeometry x="0.5" relative="1" as="geometry" />
+        </mxCell>
+        <object id="circ-wc52-1" circuit="WC52" kind="circuit" circuits="WC52" capacity_inferred="1.2T" source="loc-scinet-noc" target="loc-hpc"><mxCell style="endArrow=none;html=1;rounded=0;strokeWidth=120;strokeColor=#1BA39C;" edge="1" parent="1" source="loc-scinet-noc" target="loc-hpc"><mxGeometry relative="1" as="geometry" />
+        </mxCell></object><mxCell id="lbl-wc52-1" value="WC52  1.2T" style="edgeLabel;html=1;fontSize=13;fontStyle=1;labelBackgroundColor=#ffffff;" vertex="1" parent="circ-wc52-1">
           <mxGeometry x="0.5" relative="1" as="geometry" />
         </mxCell>
       </root>
