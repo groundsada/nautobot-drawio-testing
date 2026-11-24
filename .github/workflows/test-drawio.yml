@@ -1,0 +1,23 @@
+name: test drawio render
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: render with headless image
+        run: |
+          docker run --rm -v "$PWD/diagrams:/data" \
+            rlespinasse/drawio-desktop-headless:latest \
+            -x -f png -s 2 -o /data/probe.png /data/sc26.drawio
+          ls -l diagrams/probe.png
+      - name: verify it is a real image
+        run: |
+          python3 -c "
+          from struct import unpack
+          d=open('diagrams/probe.png','rb').read(33)
+          assert d[:4]==b'\x89PNG', 'not a PNG'
+          print('  rendered', unpack('>II', d[16:24]))
+          "
+      - uses: actions/upload-artifact@v4
+        with: {name: probe, path: diagrams/probe.png}
