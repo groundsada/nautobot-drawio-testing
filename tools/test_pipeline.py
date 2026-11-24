@@ -353,12 +353,35 @@ def test_llm_edit_adds_an_extractable_circuit():
 
 
 def test_llm_edit_uses_the_files_capacity_convention():
-    """Styling must come from the drawing's table, not an invented one."""
+    """Widths rise with capacity, and capacity is declared, not inferred.
+
+    Widths are page-scale (the poster's 25-240px swamped 300px blocks), so the
+    data must not depend on them: the circuit carries an explicit capacity.
+    """
+    import json
     import llm_edit
-    assert llm_edit.CAPACITY_STYLE["400G"][0] == 40, "400G should be width 40"
-    assert llm_edit.CAPACITY_STYLE["100G"][0] == 25, "100G should be width 25"
-    assert "2400G" not in llm_edit.CAPACITY_STYLE, \
-        "a capacity the drawing never shows must not be in the table"
+    order = ["10G", "100G", "400G", "800G", "1.2T", "2.4T"]
+    widths = [llm_edit.CAPACITY_STYLE[c][0] for c in order]
+    assert widths == sorted(widths) and len(set(widths)) == len(widths), widths
+    assert "2400G" not in llm_edit.CAPACITY_STYLE
+    src = str(HERE.parent / "diagrams" / "sc26.drawio")
+    d = tempfile.mkdtemp()
+    out, pf = os.path.join(d, "o.drawio"), os.path.join(d, "p.json")
+    pathlib.Path(pf).write_text(json.dumps({"edits": [
+        {"op": "add_edge", "circuit": "WC51", "capacity": "100G",
+         "from": "StarLight Booth 3651", "to": "Ciena Booth 5035"}]}))
+    r = subprocess.run([sys.executable, str(HERE / "llm_edit.py"), "--drawio", src,
+                        "--instruction", "x", "--plan", pf, "-o", out],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[:300]
+    c = sync_nautobot.extract(out)["circuits"]["WC51"]
+    assert c["_src"]["capacity"] == "drawing", c["_src"]
+    # StarLight and Ciena are stacked with Caltech between them: the line must
+    # leave and enter on the right side, not cut straight through Caltech
+    import xml.etree.ElementTree as ET
+    st = [o.find("mxCell").get("style") for o in ET.parse(out).getroot().iter("object")
+          if o.get("circuit") == "WC51"][0]
+    assert "exitX=1;" in st and "entryX=1;" in st, st
 
 
 def test_llm_edit_refuses_unknown_capacity():

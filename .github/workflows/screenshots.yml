@@ -38,7 +38,7 @@ jobs:
           mkdir -p diagrams/rendered
           docker run --rm -v "$PWD/diagrams:/data" \
             rlespinasse/drawio-desktop-headless:latest \
-            -x -f svg -o /data/rendered/sc26.svg /data/sc26.drawio
+            -x -f svg -b 24 -o /data/rendered/sc26.svg /data/sc26.drawio
           ls -l diagrams/rendered/
 
       - name: verify the render is real
