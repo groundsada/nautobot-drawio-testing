@@ -360,7 +360,7 @@ for d in PAYLOAD.get("devices") or []:
         fields = {
             "name": d["name"], "role": role, "location": L, "status": status,
             "device_type": dtype_for(a.get("manufacturer") or "Generic",
-                                     a.get("model") or "Generic %s" % role.name),
+                                     a.get("model") or role.name),
             "platform": (Platform.objects.get_or_create(name=a["platform"])[0]
                          if a.get("platform") else None),
             "serial": a.get("serial", ""),
