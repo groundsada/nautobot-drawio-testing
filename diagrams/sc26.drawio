@@ -12,27 +12,27 @@
           <mxGeometry x="40" y="62" width="760" height="26" as="geometry" />
         </mxCell>
         <object kind="location" site="SCinet NOC" id="loc-scinet-noc" label="SCinet NOC">
-          <mxCell style="fontFamily=Helvetica;rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#eff6ff;strokeColor=#2563eb;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0f172a;verticalAlign=top;spacingTop=14;" vertex="1" parent="1">
+          <mxCell style="fontFamily=Helvetica;rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#eff6ff;strokeColor=#2563eb;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0f172a;align=left;verticalAlign=top;spacingTop=12;spacingLeft=18;" vertex="1" parent="1">
             <mxGeometry x="40" y="110" width="380" height="560" as="geometry" />
           </mxCell>
         </object>
         <object kind="location" site="SCinet HPC Cluster" id="loc-hpc" label="SCinet HPC Cluster">
-          <mxCell style="fontFamily=Helvetica;rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#f5f3ff;strokeColor=#7c3aed;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0f172a;verticalAlign=top;spacingTop=14;" vertex="1" parent="1">
+          <mxCell style="fontFamily=Helvetica;rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#f5f3ff;strokeColor=#7c3aed;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0f172a;align=left;verticalAlign=top;spacingTop=12;spacingLeft=18;" vertex="1" parent="1">
             <mxGeometry x="40" y="730" width="380" height="170" as="geometry" />
           </mxCell>
         </object>
         <object kind="location" site="StarLight Booth 3651" id="loc-starlight" label="StarLight Booth 3651">
-          <mxCell style="fontFamily=Helvetica;rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0f172a;verticalAlign=top;spacingTop=14;" vertex="1" parent="1">
+          <mxCell style="fontFamily=Helvetica;rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0f172a;align=left;verticalAlign=top;spacingTop=12;spacingLeft=18;" vertex="1" parent="1">
             <mxGeometry x="820" y="110" width="320" height="150" as="geometry" />
           </mxCell>
         </object>
         <object kind="location" site="Caltech Booth 5438" id="loc-caltech" label="Caltech Booth 5438">
-          <mxCell style="fontFamily=Helvetica;rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0f172a;verticalAlign=top;spacingTop=14;" vertex="1" parent="1">
+          <mxCell style="fontFamily=Helvetica;rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0f172a;align=left;verticalAlign=top;spacingTop=12;spacingLeft=18;" vertex="1" parent="1">
             <mxGeometry x="820" y="315" width="320" height="150" as="geometry" />
           </mxCell>
         </object>
         <object kind="location" site="Ciena Booth 5035" id="loc-ciena" label="Ciena Booth 5035">
-          <mxCell style="fontFamily=Helvetica;rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0f172a;verticalAlign=top;spacingTop=14;" vertex="1" parent="1">
+          <mxCell style="fontFamily=Helvetica;rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0f172a;align=left;verticalAlign=top;spacingTop=12;spacingLeft=18;" vertex="1" parent="1">
             <mxGeometry x="820" y="520" width="320" height="150" as="geometry" />
           </mxCell>
         </object>
@@ -111,6 +111,14 @@
           </mxCell>
         </object>
         <mxCell id="lbl-wc53-1" value="WC53 · 400G" style="edgeLabel;html=1;fontSize=12;fontStyle=1;fontColor=#0f172a;labelBackgroundColor=#ffffff;labelBorderColor=#2563eb;spacingLeft=6;spacingRight=6;" vertex="1" parent="circ-wc53-1">
+          <mxGeometry x="0" relative="1" as="geometry" />
+        </mxCell>
+        <object id="circ-wc54-1" label="" kind="circuit" circuit="WC54" circuits="WC54" capacity="800G" source="loc-scinet-noc" target="loc-ciena">
+          <mxCell style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=24;endArrow=none;html=1;jumpStyle=gap;strokeWidth=8;strokeColor=#7c3aed;exitX=1;exitY=0.793;exitDx=0;exitDy=0;entryX=0;entryY=0.227;entryDx=0;entryDy=0;" edge="1" parent="1" source="loc-scinet-noc" target="loc-ciena">
+            <mxGeometry relative="1" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="lbl-wc54-1" value="WC54 · 800G" style="edgeLabel;html=1;fontSize=12;fontStyle=1;fontColor=#0f172a;labelBackgroundColor=#ffffff;labelBorderColor=#7c3aed;spacingLeft=6;spacingRight=6;" vertex="1" parent="circ-wc54-1">
           <mxGeometry x="0" relative="1" as="geometry" />
         </mxCell>
       </root>
