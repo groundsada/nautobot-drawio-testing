@@ -48,6 +48,21 @@ import tag_drawio  # noqa: E402
 # restricted before use. 'host{{IGNORE ALL PRIOR INSTRUCTIONS}}' must not pass.
 SAFE_KIND = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,31}$")
 SAFE_ID = re.compile(r"^WC\d{2,3}$")
+SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$")
+
+# device fill/stroke by role; the tool authors these, never the model
+ROLE_STYLE = {
+    "router": ("#1e3a8a", "#172554"),
+    "switch": ("#0f766e", "#134e4a"),
+    "module": ("#7e22ce", "#581c87"),
+    "server": ("#334155", "#1e293b"),
+}
+TIER = ["router", "switch", "module", "server"]
+DEV_W, DEV_H, GAP_X, GAP_Y, HEAD = 104, 40, 14, 46, 52
+ANCHOR = 0.68
+# devices the layout repositions and blocks it grows; the final lossless
+# check allows geometry changes for exactly these ids and nothing else
+MOVED = set()
 
 # Capacity -> stroke width/colour. The real poster uses 25/40/80/120px strokes,
 # proportioned for a wall-sized print; on a page-sized diagram they swamp the
@@ -74,9 +89,19 @@ Allowed ops:
    "from":"<exact label of an existing block>","to":"<exact label of an existing block>"}
   {"op":"add_object","kind":"<one of the available kinds>","label":"<text>",
    "attrs":{"key":"value"}}
+  {"op":"add_device","name":"<hostname>","role":"router|switch|module|server",
+   "in":"<exact label of an existing block>"}
+  {"op":"add_link","from":"<device or block label>","to":"<device or block label>",
+   "capacity":"100G","count":3}
+
+add_edge is ONLY for a WAN circuit with a WCnn id. Physical connections between
+devices (server NIC, chassis module, switch uplink) are add_link. A bundle of
+three 100G connections is one add_link with "count":3. Devices added earlier in
+the same reply may be used as link endpoints. Add devices before their links.
 
 Hard rules:
-  * Use ONLY labels and kinds listed as available. Do not invent either.
+  * Use ONLY labels and kinds listed as available, plus devices you add.
+  * Use the names the operator gives, exactly as written.
   * Never emit a style; the tool applies the file's own conventions.
   * Never invent a circuit id, capacity, or endpoint.
   * If the request cannot be done with what is available, reply
@@ -99,7 +124,9 @@ def diagram_facts(path):
             if kind not in styles and inner is not None and inner.get("style"):
                 styles[kind] = inner.get("style")
             kinds[kind] = kinds.get(kind, 0) + 1
-    return {"labels": labels, "kinds": kinds, "styles": styles}
+    locs = [(o.get("label") or "").strip() for o in tree.getroot().iter("object")
+            if o.get("kind") == "location"]
+    return {"labels": labels, "kinds": kinds, "styles": styles, "locations": locs}
 
 
 def call_llm(prompt, model=None):
@@ -119,12 +146,19 @@ def call_llm(prompt, model=None):
     req.add_header("x-api-key", tok)
     req.add_header("anthropic-version", "2023-06-01")
     req.add_header("content-type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=180) as r:
-            d = json.loads(r.read())
-        return d["content"][0]["text"], None
-    except Exception as e:            # noqa: BLE001
-        return None, str(e)[:200]
+    # a long multi-device request took longer than 180s once and failed the
+    # whole edit; allow more time and one retry on a timeout
+    err = None
+    for _ in range(2):
+        try:
+            with urllib.request.urlopen(req, timeout=300) as r:
+                d = json.loads(r.read())
+            return d["content"][0]["text"], None
+        except Exception as e:        # noqa: BLE001
+            err = str(e)[:200]
+            if "timed out" not in err:
+                break
+    return None, err
 
 
 # ------------------------------------------------------------------- apply
@@ -170,10 +204,11 @@ def _sides(root, a, b):
     """
     ax, ay, aw, ah = a[2:]
     bx, by, bw, bh = b[2:]
-    if bx >= ax + aw:
-        return "right", "left"
-    if bx + bw <= ax:
-        return "left", "right"
+    # side by side only when the two overlap vertically; otherwise run
+    # vertically -- testing left/right first sent hpc-srv-1's uplink sideways
+    # across hpc-srv-2 to reach the module above it
+    if by < ay + ah and ay < by + bh:
+        return ("right", "left") if bx >= ax else ("left", "right")
     top, bot = (a, b) if ay < by else (b, a)
     between = [l for l in _locations(root)
                if l[1] >= top[3] + top[5] - 1 and l[1] + l[3] <= bot[3] + 1
@@ -199,7 +234,7 @@ def _slot(root, block_id, side, me, other):
     f = round(min(0.8, max(0.2, f)), 2)
     used = set()
     for o in root.iter("object"):
-        if o.get("kind") != "circuit":
+        if o.get("kind") not in ("circuit", "link"):
             continue
         st = (o.find("mxCell").get("style") or "") if o.find("mxCell") is not None else ""
         for end, key in (("source", "exit"), ("target", "entry")):
@@ -231,6 +266,51 @@ def _shared(a, b, sa, sb):
     return round((c - a[i]) / a[j], 3), round((c - b[i]) / b[j], 3)
 
 
+def _location_obj(root, label):
+    for o in root.iter("object"):
+        if o.get("kind") == "location" and (o.get("label") or "").strip() == label:
+            return o
+    return None
+
+
+def _layout(root, loc):
+    """Stack a block's devices in role tiers and grow the block to fit.
+
+    Tiers run router, switch, module, server away from the block's neighbour:
+    from the top when nothing sits below the block, from the bottom when
+    something does (so the NOC's routers face the HPC cluster under it).
+    Returns the ids whose geometry it changed.
+    """
+    lid = loc.get("id")
+    g = loc.find("mxCell/mxGeometry")
+    bx, by, bw, bh = (float(g.get(k)) for k in ("x", "y", "width", "height"))
+    devs = [o for o in root.iter("object")
+            if o.get("kind") == "device" and o.get("location") == lid]
+    rows = [[d for d in devs if d.get("role") == t] for t in TIER]
+    rows = [r for r in rows if r]
+    need = HEAD + len(rows) * DEV_H + (len(rows) - 1) * GAP_Y + 28
+    moved = {d.get("id") for d in devs}
+    if need > bh:
+        g.set("height", str(int(need)))
+        bh = need
+        moved.add(lid)
+    below = any(l[1] >= by + bh - 1 and l[0] < bx + bw and l[0] + l[2] > bx
+                for l in _locations(root) if l[:2] != (bx, by))
+    for i, row in enumerate(rows if not below else rows):
+        width = len(row) * DEV_W + (len(row) - 1) * GAP_X
+        # anchored right of centre: the block title sits top-left and
+        # block-to-block circuits use the centre line, so a device uplink
+        # centred there ran on top of WC52 and through the title
+        left = min(max(bx + 16, bx + bw * ANCHOR - width / 2), bx + bw - 16 - width)
+        y = (by + HEAD + i * (DEV_H + GAP_Y) if not below
+             else by + bh - 28 - DEV_H - i * (DEV_H + GAP_Y))
+        for j, d in enumerate(row):
+            dg = d.find("mxCell/mxGeometry")
+            dg.set("x", str(int(left + j * (DEV_W + GAP_X))))
+            dg.set("y", str(int(y)))
+    return moved
+
+
 def _port(side, f):
     return {"right": (1, f), "left": (0, f),
             "top": (f, 0), "bottom": (f, 1)}[side]
@@ -240,11 +320,12 @@ def apply_edits(src, plan, facts, out):
     """Apply supported ops; refuse anything else. Returns (applied, errors)."""
     errors, applied = [], 0
 
+    planned = []
     for e in plan.get("edits", []):
         if e.get("style") or (e.get("attrs") or {}).get("style"):
             errors.append("agent tried to author a style -- refused")
             continue
-        if e.get("op") not in ("add_object", "add_edge"):
+        if e.get("op") not in ("add_object", "add_edge", "add_device", "add_link"):
             errors.append("unsupported op %r" % e.get("op"))
             continue
         if e.get("op") == "add_object" and e.get("kind") not in facts["kinds"]:
@@ -257,7 +338,26 @@ def apply_edits(src, plan, facts, out):
                 errors.append("unknown capacity %r (have %s)"
                               % (e.get("capacity"), sorted(CAPACITY_STYLE)))
             for end in (e.get("from"), e.get("to")):
-                if end not in facts["labels"]:
+                if end not in facts["labels"] + planned:
+                    errors.append("unknown endpoint %r" % end)
+        if e.get("op") == "add_device":
+            if not SAFE_NAME.match(str(e.get("name") or "")):
+                errors.append("bad device name %r" % e.get("name"))
+            elif e["name"] in facts["labels"] + planned:
+                errors.append("device %r already exists" % e["name"])
+            if e.get("role") not in ROLE_STYLE:
+                errors.append("unknown role %r (have %s)" % (e.get("role"), sorted(ROLE_STYLE)))
+            if e.get("in") not in facts["locations"]:
+                errors.append("unknown block %r" % e.get("in"))
+            planned.append(str(e.get("name")))
+        if e.get("op") == "add_link":
+            if e.get("capacity") not in CAPACITY_STYLE:
+                errors.append("unknown capacity %r (have %s)"
+                              % (e.get("capacity"), sorted(CAPACITY_STYLE)))
+            if not isinstance(e.get("count", 1), int) or not 1 <= e.get("count", 1) <= 16:
+                errors.append("bad link count %r" % e.get("count"))
+            for end in (e.get("from"), e.get("to")):
+                if end not in facts["labels"] + planned:
                     errors.append("unknown endpoint %r" % end)
     if errors:
         return 0, errors
@@ -289,6 +389,58 @@ def apply_edits(src, plan, facts, out):
             ET.SubElement(c, "mxGeometry",
                           {"x": "120", "y": "120", "width": "160",
                            "height": "60", "as": "geometry"})
+            applied += 1
+            continue
+
+        if e["op"] == "add_device":
+            loc = _location_obj(root, e["in"])
+            o = ET.SubElement(holder, "object", {
+                "id": fresh("dev-" + re.sub(r"[^a-z0-9]+", "-", e["name"].lower())),
+                "label": e["name"], "kind": "device", "role": e["role"],
+                "location": loc.get("id")})
+            fill, stroke = ROLE_STYLE[e["role"]]
+            c = ET.SubElement(o, "mxCell", {
+                "style": ("rounded=1;arcSize=12;whiteSpace=wrap;html=1;fontFamily=Helvetica;"
+                          "fillColor=%s;strokeColor=%s;fontColor=#ffffff;fontSize=12;"
+                          "fontStyle=1;" % (fill, stroke)),
+                "vertex": "1", "parent": "1"})
+            ET.SubElement(c, "mxGeometry", {"x": "0", "y": "0", "width": str(DEV_W),
+                                            "height": str(DEV_H), "as": "geometry"})
+            MOVED.update(_layout(root, loc))
+            applied += 1
+            continue
+
+        if e["op"] == "add_link":
+            a_id, a = _block_center(root, e["from"])
+            b_id, b = _block_center(root, e["to"])
+            width, colour = CAPACITY_STYLE[e["capacity"]]
+            sa, sb = _sides(root, a, b)
+            fa = _slot(root, a_id, sa, a, b)
+            fb = _slot(root, b_id, sb, b, a)
+            shared = _shared(a, b, sa, sb)
+            if shared:
+                fa, fb = shared
+            (ex, ey), (nx, ny) = _port(sa, fa), _port(sb, fb)
+            n = int(e.get("count", 1))
+            lid = fresh("link")
+            obj = ET.SubElement(holder, "object", {
+                "id": lid, "label": "", "kind": "link", "capacity": e["capacity"],
+                "count": str(n), "source": a_id, "target": b_id})
+            cell = ET.SubElement(obj, "mxCell", {
+                "style": ("edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=24;"
+                          "endArrow=none;html=1;jumpStyle=gap;strokeWidth=%d;"
+                          "strokeColor=%s;exitX=%s;exitY=%s;exitDx=0;exitDy=0;"
+                          "entryX=%s;entryY=%s;entryDx=0;entryDy=0;"
+                          % (max(2, width - 2), colour, ex, ey, nx, ny)),
+                "edge": "1", "parent": "1", "source": a_id, "target": b_id})
+            ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
+            lbl = ET.SubElement(holder, "mxCell", {
+                "id": fresh("lbl-link"),
+                "value": ("%d×%s" % (n, e["capacity"])) if n > 1 else e["capacity"],
+                "style": ("edgeLabel;html=1;fontSize=11;fontColor=#334155;"
+                          "labelBackgroundColor=#ffffff;"),
+                "vertex": "1", "parent": lid})
+            ET.SubElement(lbl, "mxGeometry", {"x": "0", "relative": "1", "as": "geometry"})
             applied += 1
             continue
 
@@ -403,6 +555,10 @@ def main(argv=None):
 
     # prove the result still round-trips
     problems, _, _, _ = tag_drawio.check(a.drawio, a.out)
+    problems = [p for p in problems
+                if not (p.split(":", 1)[0] in MOVED and "geometry" in p)]
+    if MOVED:
+        print("  laid out / resized: %s" % ", ".join(sorted(MOVED)))
     if problems:
         print("EDIT BROKE THE DRAWING:", file=sys.stderr)
         for p in problems[:5]:

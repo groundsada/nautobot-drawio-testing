@@ -64,7 +64,7 @@ def build():
         vertex(bid, label,
                "rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=%s;"
                "strokeColor=%s;strokeWidth=2;fontSize=17;fontStyle=1;"
-               "fontColor=#0f172a;verticalAlign=top;spacingTop=14;" % (fill, stroke),
+               "fontColor=#0f172a;align=left;verticalAlign=top;spacingTop=12;spacingLeft=18;" % (fill, stroke),
                x, y, w, h, wrap={"kind": "location", "site": label})
 
     # legend: one swatch per capacity, same width/colour as the edges
