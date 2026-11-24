@@ -92,32 +92,65 @@ jobs:
           python3 tools/sync_nautobot.py --drawio diagrams/sc26.drawio \
             --dry-run --skip-cluster
 
-      - name: commit to the PR branch
+      # Rendered here rather than left to screenshots.yml: a push made with
+      # GITHUB_TOKEN does not trigger other workflows, so the agent's own
+      # commit would never get a screenshot. SVG because PNG crashes the
+      # headless renderer on hosted runners.
+      - name: render the edited diagram
         if: steps.cfg.outputs.configured == 'true' && success()
+        run: |
+          mkdir -p diagrams/rendered
+          docker run --rm -v "$PWD/diagrams:/data" \
+            rlespinasse/drawio-desktop-headless:latest \
+            -x -f svg -o /data/rendered/sc26.svg /data/sc26.drawio
+          python3 - diagrams/rendered/sc26.svg <<'PY'
+          import sys, re
+          s = open(sys.argv[1]).read()
+          rects, paths = len(re.findall(r'<rect', s)), len(re.findall(r'<path', s))
+          print(f"  {len(s)} bytes, {rects} rects, {paths} paths")
+          assert rects >= 5, f"only {rects} rects -- render looks blank"
+          PY
+
+      - name: commit to the PR branch
+        id: commit
+        if: steps.cfg.outputs.configured == 'true' && success()
+        env:
+          # via env, never ${{ }} inside run: -- the comment is user text and
+          # interpolating it into the script is a shell-injection hole
+          COMMENT: ${{ github.event.comment.body }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet diagrams/sc26.drawio; then
+          # stage first: `git diff` without --cached reports nothing for a
+          # change that has not been added yet, which made this check always
+          # say "no change" even when the agent had edited the file
+          git add diagrams/sc26.drawio diagrams/rendered/sc26.svg
+          if git diff --cached --quiet; then
             echo "::notice::agent produced no change to the diagram"
             exit 0
           fi
-          git add diagrams/sc26.drawio
-          git commit -m "agent: ${{ github.event.comment.body }}"
+          git commit -m "agent: $(printf '%s' "$COMMENT" | head -1 | cut -c1-72)"
           git push
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: report back on the PR
         if: always() && steps.cfg.outputs.configured == 'true'
         uses: actions/github-script@v7
         env:
           OUTCOME: ${{ steps.agent.outcome }}
+          SHA: ${{ steps.commit.outputs.sha }}
         with:
           script: |
             const ok = process.env.OUTCOME === 'success';
             const plan = require('fs').existsSync('/tmp/plan.json')
               ? require('fs').readFileSync('/tmp/plan.json', 'utf8').slice(0, 1200)
               : '(no plan produced)';
+            // pinned to the commit sha so the image never shows a cached older render
+            const img = process.env.SHA
+              ? `\n\n<img src="https://raw.githubusercontent.com/${context.repo.owner}/${context.repo.repo}/${process.env.SHA}/diagrams/rendered/sc26.svg" width="760" alt="diagram after this edit">`
+              : '';
             const body = ok
-              ? `### Agent edit applied to this PR\n\n\`\`\`json\n${plan}\n\`\`\`\n\nThe diagram was changed on this branch. Review it, then comment \`/apply\` to write it to Nautobot.`
+              ? `### Agent edit applied to this PR\n\n\`\`\`json\n${plan}\n\`\`\`${img}\n\nReview it, then comment \`/apply\` to write it to Nautobot.`
               : `### Agent edit failed\n\nSee the [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}). Nothing was committed.`;
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
