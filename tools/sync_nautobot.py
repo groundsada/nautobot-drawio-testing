@@ -201,7 +201,7 @@ IFACE_TYPE = {"10G": "10gbase-x-sfpp", "25G": "25gbase-x-sfp28",
 # attributes that become Device fields; everything else lands in comments
 DEVICE_FIELDS = {"model", "manufacturer", "platform", "serial", "asset_tag", "status"}
 OWNED = {"id", "label", "kind", "role", "location", "source", "target", "capacity",
-         "count", "a_ports", "b_ports", "near"}
+         "count", "a_ports", "b_ports", "near", "port_sides", "icon"}
 
 
 def extract_inventory(path):
@@ -246,6 +246,19 @@ def extract_inventory(path):
                            "a_iface": ends[0], "b_iface": ends[1]})
         links.append({"link_id": o.get("id"), "a": a, "b": b, "capacity": cap,
                       "type": IFACE_TYPE.get(cap, "other"), "cables": cables})
+    # drawn ports are interfaces even with nothing plugged in. A port a link
+    # uses takes the link's type, or the two writes would flip it every run
+    # and the no-op check would never pass.
+    cabled = {}
+    for l in links:
+        for c in l["cables"]:
+            cabled[(l["a"], c["a_iface"])] = cabled[(l["b"], c["b_iface"])] = l["type"]
+    for d in devices:
+        d["ports"] = [{"name": (o.get("label") or "").strip(),
+                       "type": cabled.get((d["node_id"], (o.get("label") or "").strip()),
+                                          IFACE_TYPE.get(o.get("speed"), "other"))}
+                      for o in objs if o.get("kind") == "port"
+                      and o.get("device") == d["node_id"] and (o.get("label") or "").strip()]
     return devices, links
 
 
@@ -423,6 +436,16 @@ def cable(label, a, b):
     note("created")
 
 want_cables, want_ifaces = set(), set()
+for d in PAYLOAD.get("devices") or []:
+    dev = devmap.get(d["node_id"])
+    if dev is None:
+        continue
+    for p in d.get("ports") or []:
+        want_ifaces.add((dev.pk, p["name"]))
+        try:
+            iface(dev, p["name"], p["type"])
+        except Exception as e:
+            OUT["errors"].append("port %s:%s: %s" % (d["name"], p["name"], str(e)[:120]))
 for l in PAYLOAD.get("links") or []:
     da, db = devmap.get(l["a"]), devmap.get(l["b"])
     if da is None or db is None:
