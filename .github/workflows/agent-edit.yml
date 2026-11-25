@@ -78,7 +78,7 @@ jobs:
         env:
           NRP_AUTH_TOKEN: ${{ secrets.NRP_AUTH_TOKEN }}
           NRP_BASE_URL: ${{ vars.NRP_BASE_URL }}
-          NRP_ANTHROPIC_MODEL: ${{ vars.NRP_MODEL || 'deepseek-v4-flash' }}
+          NRP_ANTHROPIC_MODEL: ${{ vars.NRP_MODEL || 'gpt-oss' }}
           INSTRUCTION: ${{ github.event.comment.body }}
         run: |
           # strip the leading '/draw ' command word
@@ -90,6 +90,30 @@ jobs:
               print("no /draw line in the comment; nothing to do")
               sys.exit(0)
           instruction = m.group(1).strip()
+          # "/draw undo" puts the drawing back as it was before the last
+          # agent commit on this branch: no model, and a normal new commit
+          if re.fullmatch(r"(?i)(undo|revert)( last( change| edit)?)?\.?", instruction):
+              log = subprocess.run(["git", "log", "--format=%H %s", "--",
+                                    "diagrams/sc26.drawio"],
+                                   capture_output=True, text=True).stdout.splitlines()
+              # each earlier undo already used up one edit: skip that many
+              agent = [l for l in log if l.split(" ", 1)[1].startswith("agent: ")]
+              undos = 0
+              while undos < len(agent) and re.search(r"/draw\s+(undo|revert)", agent[undos]):
+                  undos += 1
+              edits = [l.split()[0] for l in agent
+                       if not re.search(r"/draw\s+(undo|revert)", l)]
+              last = edits[undos] if undos < len(edits) else None
+              if last is None:
+                  open("/tmp/edit.log", "w").write("nothing to undo: no agent commit on this branch\n")
+                  sys.exit(1)
+              subprocess.run(["git", "checkout", last + "^", "--", "diagrams/sc26.drawio"],
+                             check=True)
+              msg = "  - restored the drawing from before %s\n" % last[:7]
+              print(msg)
+              open("/tmp/edit.log", "w").write(msg)
+              open("/tmp/plan.json", "w").write('{"summary":"Undid the last agent edit.","edits":[]}')
+              sys.exit(0)
           r = subprocess.run([sys.executable, "tools/llm_edit.py",
                               "--drawio", "diagrams/sc26.drawio",
                               "--instruction", instruction,
@@ -230,9 +254,19 @@ jobs:
                  `<details><summary>plan</summary>\n\n\`\`\`json\n${plan}\n\`\`\`\n</details>`,
                  `Comment \`/draw <change>\` again to keep editing.`].filter(Boolean).join('\n\n')
               : `### Edit not applied\n\n\`\`\`\n${read('/tmp/edit.log', 3000) || 'no output'}\n\`\`\`\n\nNothing was committed and Nautobot was not touched. See the [workflow run](${run}).`;
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body
-            });
+            // the API answered 500 once and the operator got no reply at all;
+            // retry server errors before giving up
+            for (let i = 0; ; i++) {
+              try {
+                await github.rest.issues.createComment({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body
+                });
+                break;
+              } catch (e) {
+                if (i >= 4 || (e.status && e.status < 500)) throw e;
+                await new Promise(r => setTimeout(r, 3000 * (i + 1)));
+              }
+            }

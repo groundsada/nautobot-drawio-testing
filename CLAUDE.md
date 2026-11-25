@@ -56,6 +56,15 @@ render and a Mermaid diagram built from Nautobot's read-back
   id), so a rename in the drawing renames the row.
 - Ports are named in `extract_inventory()` (`to <peer>`, `#n` in a bundle, or
   explicit `a_ports`/`b_ports`), deterministically, so re-runs converge.
+  Drawn ports (`kind="port"`, child cells of their device, from `add_ports`)
+  are interfaces too; a link into a device with drawn ports claims free ones
+  (`Edit.claim_ports`), so cables land on real port names.
+- After all ops, `Edit.run` settles the layout: grown blocks push neighbours
+  (and the legend) aside, then every line whose end moved is re-routed.
+- Logos are vendored in `logos/` (`tools/fetch_logos.py`, simple-icons CC0);
+  an unknown brand draws a text badge, never a guessed mark.
+- `/draw undo` restores the drawing from before the last agent commit, as a
+  new commit (repeat it to go further back).
 - Nautobot access: secret `KUBECONFIG_B64` (service account
   `drawio-pipeline`, see `rbac/`), enabled by variable
   `NAUTOBOT_SYNC_ENABLED=true`.
@@ -63,7 +72,7 @@ render and a Mermaid diagram built from Nautobot's read-back
 ## Commands
 
 ```bash
-python3 tools/test_pipeline.py                                    # 42 tests
+python3 tools/test_pipeline.py                                    # 53 tests
 python3 tools/tag_drawio.py tag diagrams/sc26.drawio -o /tmp/t.drawio
 python3 tools/tag_drawio.py check diagrams/sc26.drawio /tmp/t.drawio
 python3 tools/sync_nautobot.py --drawio /tmp/t.drawio --dry-run --skip-cluster

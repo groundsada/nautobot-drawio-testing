@@ -22,6 +22,7 @@ sys.path.insert(0, str(HERE))
 
 import tag_drawio  # noqa: E402
 import sync_nautobot  # noqa: E402
+import llm_edit  # noqa: E402
 
 
 # --------------------------------------------------------------- fixtures
@@ -723,6 +724,167 @@ def test_nautobot_view_draws_from_readback_only():
         "cables": [{"label": "link-1/1", "A": "r1:to s1", "B": "s1:to r1"}],
         "circuits": [{"cid": "WC51", "provider": "p", "ends": {"A": "A", "Z": "B"}}]}})
     assert "```mermaid" in md and "D_r1 ---|\"1 cable\"| D_s1" in md and 'L_A -.-|"WC51"| L_B' in md, md
+
+
+# ------------------------------------- the wider op set: ports, logos, hops
+def _hpc(extra):
+    d, src = _blank()
+    out = os.path.join(d, "o.drawio")
+    r = _edit(src, out, HPC + extra)
+    return d, out, r
+
+
+def _objs(path, kind):
+    import xml.etree.ElementTree as ET
+    return [o for o in ET.parse(path).getroot().iter("object") if o.get("kind") == kind]
+
+
+def test_ports_ranges_expand_and_reach_nautobot_as_interfaces():
+    """'/draw ... add ports Ethernet0 .. Ethernet64' was refused outright: there
+    was no op for it. Ports must be drawn, sized to fit and synced."""
+    d, out, r = _hpc([
+        {"op": "rename", "target": "hpc-sw-1", "to": "cisco8122_s0"},
+        {"op": "resize", "target": "cisco8122_s0", "scale": 2.5},
+        {"op": "add_ports", "target": "cisco8122_s0", "ports": "Ethernet0-64",
+         "sides": "all", "speed": "400G"}])
+    assert r.returncode == 0, r.stderr[-600:]
+    ports = _objs(out, "port")
+    assert len(ports) == 65 and {p.get("side") for p in ports} == set(llm_edit.SIDES)
+    dev = [x for x in sync_nautobot.extract(out)["devices"] if x["name"] == "cisco8122_s0"][0]
+    names = [p["name"] for p in dev["ports"]]
+    assert names[0] == "Ethernet0" and names[-1] == "Ethernet64" and len(names) == 65
+    assert "port_sides" not in dev["attrs"], "layout attribute leaked into Nautobot"
+    # links into a device with ports plug into real ones, typed like the link
+    used = {c["b_iface"] if l["b"] == dev["node_id"] else c["a_iface"]
+            for l in sync_nautobot.extract(out)["links"] for c in l["cables"]
+            if dev["node_id"] in (l["a"], l["b"])}
+    assert used <= set(names), used
+    typed = {p["name"]: p["type"] for p in dev["ports"]}
+    assert all(typed[u] in ("100gbase-x-qsfp28", "400gbase-x-qsfpdd") for u in used)
+
+
+def test_port_range_forms():
+    e = llm_edit._expand_ports
+    assert len(e("Ethernet0-Ethernet64")) == 65
+    assert e("Ethernet1/1-1/3") == ["Ethernet1/1", "Ethernet1/2", "Ethernet1/3"]
+    assert e("1/1/c1-c2, mgmt0") == ["1/1/c1", "1/1/c2", "mgmt0"]
+    assert e("ge-0/0/1") == ["ge-0/0/1"], "a Juniper name is not a range"
+    assert e("swp01-swp03") == ["swp01", "swp02", "swp03"]
+
+
+def test_port_with_a_link_cannot_be_removed():
+    d, out, r = _hpc([
+        {"op": "add_ports", "target": "hpc-sw-1", "ports": "Ethernet1-4"},
+        {"op": "add_link", "from": "hpc-sw-1:Ethernet2", "to": "srv-1", "capacity": "100G"},
+        {"op": "remove_ports", "target": "hpc-sw-1", "ports": "all"}])
+    assert r.returncode == 1 and "carry a link" in r.stderr, r.stderr[-400:]
+
+
+def test_rename_port_carries_its_link():
+    d, out, r = _hpc([
+        {"op": "add_ports", "target": "hpc-sw-1", "ports": "Ethernet1-8"},
+        {"op": "add_link", "from": "hpc-sw-1:Ethernet5", "to": "srv-1", "capacity": "100G"},
+        {"op": "rename_port", "target": "hpc-sw-1", "port": "Ethernet5", "to": "uplink0"}])
+    assert r.returncode == 0, r.stderr[-400:]
+    link = [l for l in _objs(out, "link") if l.get("a_ports") or l.get("b_ports")]
+    assert any("uplink0" in (l.get("a_ports") or "") for l in link), [l.attrib for l in link]
+
+
+def test_insert_puts_a_device_in_the_path():
+    d, out, r = _hpc([{"op": "insert", "between": ["hpc-sw-1", "noka-3"],
+                       "device": {"name": "fw-1", "role": "firewall", "in": "SCinet NOC"}}])
+    assert r.returncode == 0, r.stderr[-400:]
+    ex = sync_nautobot.extract(out)
+    ids = {x["node_id"]: x["name"] for x in ex["devices"]}
+    pairs = {frozenset((ids[l["a"]], ids[l["b"]])) for l in ex["links"]}
+    assert frozenset(("hpc-sw-1", "noka-3")) not in pairs
+    assert {frozenset(("hpc-sw-1", "fw-1")), frozenset(("fw-1", "noka-3"))} <= pairs
+    assert all(l["capacity"] == "400G" for l in ex["links"]
+               if "fw-1" in (ids[l["a"]], ids[l["b"]]))
+
+
+def test_copy_adds_devices_with_their_links_and_selectors_delete_them():
+    d, out, r = _hpc([{"op": "copy", "target": "srv-1", "count": 3}])
+    assert r.returncode == 0, r.stderr[-400:]
+    names = sorted(x["name"] for x in sync_nautobot.extract(out)["devices"])
+    assert names[-4:] == ["srv-1", "srv-2", "srv-3", "srv-4"], names
+    assert len([l for l in _objs(out, "link")]) == 3 + 3
+    out2 = out + ".2"
+    r = _edit(out, out2, [{"op": "delete", "target": "srv-*"}])
+    assert r.returncode == 0, r.stderr[-400:]
+    assert not [x for x in sync_nautobot.extract(out2)["devices"] if x["name"].startswith("srv")]
+
+
+def test_look_ops_shapes_colours_logos_text():
+    d, out, r = _hpc([
+        {"op": "set_shape", "target": "role:server", "shape": "server"},
+        {"op": "recolor", "target": "ifm-1", "color": "orange"},
+        {"op": "restyle", "target": "noka-3", "props": {"fontSize": 14, "shadow": 1}},
+        {"op": "add_logo", "logo": "cisco", "on": "hpc-sw-1"},
+        {"op": "add_logo", "logo": "Some Vendor", "on": "SCinet NOC"},
+        {"op": "set_text", "target": "title", "text": "SC26 network"}])
+    assert r.returncode == 0, r.stderr[-600:]
+    import xml.etree.ElementTree as ET
+    root = ET.parse(out).getroot()
+    style = {o.get("label"): o.find("mxCell").get("style") for o in root.iter("object")}
+    assert "mxgraph.networks.server" in style["srv-1"]
+    assert "fillColor=#ea580c" in style["ifm-1"]
+    assert "fontSize=14" in style["noka-3"] and "shadow=1" in style["noka-3"]
+    logos = _objs(out, "logo")
+    assert len(logos) == 2 and all("image=data:image/svg+xml," in l.find("mxCell").get("style")
+                                   for l in logos)
+    assert "logos/cisco.svg" in r.stdout and "text badge" in r.stdout
+    assert any(c.get("value") == "SC26 network" for c in root.iter("mxCell"))
+    # nothing of the look reaches Nautobot as a device attribute
+    dev = {x["name"]: x for x in sync_nautobot.extract(out)["devices"]}
+    assert "icon" not in dev["srv-1"]["attrs"]
+
+
+def test_look_ops_refuse_arbitrary_style():
+    d, out, r = _hpc([{"op": "restyle", "target": "noka-3",
+                       "props": {"image": "https://evil.example/x.png"}}])
+    assert r.returncode == 1 and "not allowed" in r.stderr, r.stderr[-300:]
+    d, out, r = _hpc([{"op": "recolor", "target": "noka-3", "color": "url(#x)"}])
+    assert r.returncode == 1
+
+
+def test_grown_block_pushes_neighbour_and_legend_away():
+    """A big switch grew its block over the one below; a new block landed on
+    the legend. Neither may overlap anything after a plan."""
+    d, out, r = _hpc([
+        {"op": "add_location", "name": "ESnet PoP", "below": "Ciena Booth 5035"},
+        {"op": "add_device", "names": ["e1", "e2", "e3"], "role": "router", "in": "ESnet PoP"},
+        {"op": "resize", "target": "SCinet NOC", "height": 800}])
+    assert r.returncode == 0, r.stderr[-400:]
+    ed = llm_edit.Edit(out)
+    blocks = [ed.geo(o)[2:] for o in ed.objects("location")]
+    boxes = blocks + ed.fixed()
+    for i, a in enumerate(blocks):
+        for b in boxes[i + 1:]:
+            overlap = (min(a[0] + a[2], b[0] + b[2]) > max(a[0], b[0]) and
+                       min(a[1] + a[3], b[1] + b[3]) > max(a[1], b[1]))
+            assert not overlap, (a, b)
+
+
+def test_partial_plan_reports_what_was_skipped():
+    d, src = _blank()
+    out = os.path.join(d, "o.drawio")
+    import json
+    pf = out + ".plan.json"
+    pathlib.Path(pf).write_text(json.dumps({
+        "edits": [{"op": "add_device", "name": "r1", "role": "router", "in": "SCinet NOC"}],
+        "skipped": ["a 3D view"]}))
+    r = subprocess.run([sys.executable, str(HERE / "llm_edit.py"), "--drawio", src,
+                        "--instruction", "x", "--plan", pf, "-o", out],
+                       capture_output=True, text=True)
+    assert r.returncode == 0 and "! not done: a 3D view" in r.stdout, r.stdout + r.stderr
+
+
+def test_remote_script_syncs_drawn_ports():
+    t = sync_nautobot.REMOTE_TEMPLATE
+    ports = t.index('d.get("ports")')
+    assert ports < t.index('for l in PAYLOAD.get("links")'), "ports synced after links"
+    assert "want_ifaces.add((dev.pk, p[\"name\"]))" in t, "drawn ports would be pruned"
 
 
 # --------------------------------------------------------------- runner
